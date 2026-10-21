@@ -1391,7 +1391,7 @@ def plot_per_test_l2_curves(l2_dict):
         plt.grid(True, alpha=0.3)
         plt.legend()
         plt.tight_layout()
-        path = os.path.join(out_dir, f"test_{i:03d}_L2_error_per_timestep.png")
+        path = os.path.join(out_dir, f"test_{i:03d}_L2_error_per_timestep_{BASE_TAG}.png")
         plt.savefig(path, dpi=PLOT_DPI)
         plt.close()
         print("Saved:", path)
@@ -1487,7 +1487,7 @@ def plot_annulus_cases(U_true, rollouts):
             label="c",
         )
 
-        path = os.path.join(out_dir, f"test_{i:03d}_annulus_fields.png")
+        path = os.path.join(out_dir, f"test_{i:03d}_annulus_fields_{BASE_TAG}.png")
         plt.savefig(path, dpi=PLOT_DPI)
         plt.close(fig)
 
@@ -1534,7 +1534,7 @@ def plot_one_ranked_case(idx, rank_name, U_true, rollouts, l2_dict, full_l2_refe
     ax.legend(fontsize=8)
     for c in range(1, ncols):
         axes[-1, c].axis("off")
-    path = os.path.join(out_dir, f"{safe_name(rank_name)}_test_{idx:03d}.png")
+    path = os.path.join(out_dir, f"{safe_name(rank_name)}_test_{idx:03d}_{BASE_TAG}.png")
     plt.savefig(path, dpi=PLOT_DPI)
     plt.close(fig)
     print("Saved:", path)

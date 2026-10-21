@@ -1841,10 +1841,23 @@ def evaluate_on_common_test_set(bundle, U_test, test_ids):
 
     u0_test = U_test[:, :, :, 0]
     nt = U_test.shape[-1]
-    U_roll_tb = autoregressive_rollout_tb_awfno(bundle["tb_fit"]["model"], u0_test, nt, bundle["tb_predict"], True)
-    U_roll_aw = autoregressive_rollout_direct(bundle["aw_fit"]["model"], u0_test, nt, bundle["aw_predict"], "AWFNO", True)
-    U_roll_wf = autoregressive_rollout_direct(bundle["wf_fit"]["model"], u0_test, nt, bundle["wf_predict"], "WFNO", True)
-    U_roll_fn = direct_full_trajectory_prediction(bundle["fn_fit"]["model"], u0_test, nt, bundle["fn_predict"], "FNO", BATCH_SIZE)
+    def timed_full_test_rollout(name, operation):
+        # Wall clock includes the complete held-out test-set prediction;
+        # synchronizing prevents asynchronous GPU kernels from corrupting timings.
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_start = time.perf_counter()
+        pred = operation()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elapsed = time.perf_counter() - t_start
+        print(f"[ORIGINAL N={n_train}] {name} full test-set rollout: {elapsed:.3f} s", flush=True)
+        return pred, elapsed
+
+    U_roll_tb, tb_infer_s = timed_full_test_rollout("TB-AWFNO", lambda: autoregressive_rollout_tb_awfno(bundle["tb_fit"]["model"], u0_test, nt, bundle["tb_predict"], True))
+    U_roll_aw, aw_infer_s = timed_full_test_rollout("AWFNO", lambda: autoregressive_rollout_direct(bundle["aw_fit"]["model"], u0_test, nt, bundle["aw_predict"], "AWFNO", True))
+    U_roll_wf, wf_infer_s = timed_full_test_rollout("WFNO", lambda: autoregressive_rollout_direct(bundle["wf_fit"]["model"], u0_test, nt, bundle["wf_predict"], "WFNO", True))
+    U_roll_fn, fn_infer_s = timed_full_test_rollout("FNO", lambda: direct_full_trajectory_prediction(bundle["fn_fit"]["model"], u0_test, nt, bundle["fn_predict"], "FNO", BATCH_SIZE))
 
     print("\nTerminal errors")
     print("---------------")
@@ -1925,6 +1938,34 @@ def evaluate_on_common_test_set(bundle, U_test, test_ids):
         "rollout_path": rollout_path,
         "best_worst_plot_paths": best_worst_paths,
     }
+
+    # Extended reporting: same test predictions and physical quadrature as above.
+    # Keep original summary keys intact for backward compatibility.
+    original_details = [
+        ("TB_AWFNO", tb_stats, bundle["tb_fit"]["model"], tb_infer_s, U_roll_tb),
+        ("AWFNO", aw_stats, bundle["aw_fit"]["model"], aw_infer_s, U_roll_aw),
+        ("WFNO", wf_stats, bundle["wf_fit"]["model"], wf_infer_s, U_roll_wf),
+        ("FNO", fn_stats, bundle["fn_fit"]["model"], fn_infer_s, U_roll_fn),
+    ]
+    for prefix, stats, model, infer_s, rollout in original_details:
+        row.update({
+            f"{prefix}_full_l2_std": stats["full_l2_std"],
+            f"{prefix}_full_l2_median": stats["full_l2_median"],
+            f"{prefix}_final_l2_std": stats["final_l2_std"],
+            f"{prefix}_final_l2_median": stats["final_l2_median"],
+            f"{prefix}_numel_parameters": count_params(model),
+            f"{prefix}_real_scalar_dof": scalar_dof(model),
+            f"{prefix}_full_test_set_inference_seconds": infer_s,
+        })
+        if os.environ.get("ORIGINAL_DECOMPOSITION_DIAGNOSTICS", "1") == "1":
+            diagnostics = decomposition_diagnostics(rollout, U_test)
+            for key, value in diagnostics.items():
+                row[f"{prefix}_{key}"] = value
+        print(f"N={n_train:4d} | {prefix:<8} | full mean {stats['full_l2_mean']:.6e} "
+              f"std {stats['full_l2_std']:.6e} median {stats['full_l2_median']:.6e} | "
+              f"final mean {stats['final_l2_mean']:.6e} std {stats['final_l2_std']:.6e} | "
+              f"params {count_params(model):,} | train {row[prefix + '_train_time_sec']:.2f}s | "
+              f"full test inference {infer_s:.3f}s", flush=True)
 
     summary_path = os.path.join(RESULTS_DIR, f"N{n_train}_summary_common_test_{BASE_TAG}.json")
     summary = {
@@ -2365,6 +2406,7 @@ def main():
     print("N_VAL/N_TEST     :", N_VAL, N_TEST)
     print("EPOCHS           :", EPOCHS)
 
+    print(f"[ORIGINAL] Opening annulus dataset ({DATA_PATH.stat().st_size / 1024**3:.2f} GiB); loading data into CPU memory.", flush=True)
     U_all, r, theta, t, sample_ids = load_annulus_dataset(DATA_PATH)
     U_all, r, theta = downsample_polar_grid(U_all, r, theta, TARGET_NR, TARGET_NTHETA)
     set_geometry_from_arrays(U_all.shape, r, theta, t)
@@ -2386,30 +2428,39 @@ def main():
         check_dataset_overlap(U_train_pool, U_test, "train_pool", "test", tol=OVERLAP_TOL)
         check_dataset_overlap(U_val, U_test, "val", "test", tol=OVERLAP_TOL)
 
-    bundles = []
-    for n_train in SAMPLE_SIZES:
-        bundle = train_models_for_sample_size(n_train, U_train_pool, U_val)
-        bundles.append(bundle)
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
-
     rows = []
-    for bundle in bundles:
+    sweep_tag = '-'.join(map(str, SAMPLE_SIZES))
+    summary_table_path = os.path.join(RESULTS_DIR, f"sample_size_sweep_summary_run_{sweep_tag}.json")
+    summary_csv_path = os.path.join(RESULTS_DIR, f"sample_size_sweep_summary_run_{sweep_tag}.csv")
+
+    for index, n_train in enumerate(SAMPLE_SIZES, 1):
+        print(f"\n[ORIGINAL {index}/{len(SAMPLE_SIZES)}] BEGIN TRAIN + TEST | N_train={n_train}", flush=True)
+        bundle = train_models_for_sample_size(n_train, U_train_pool, U_val)
         row = evaluate_on_common_test_set(bundle, U_test, test_sample_ids)
         rows.append(row)
+        del bundle
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
 
-    rows_sorted = sorted(rows, key=lambda r: r["N_train"])
-    summary_table_path = os.path.join(RESULTS_DIR, f"sample_size_sweep_summary_run_{'-'.join(map(str, SAMPLE_SIZES))}.json")
-    with open(summary_table_path, "w") as f:
-        json.dump(rows_sorted, f, indent=2)
-    print("Saved sample-size summary:", summary_table_path)
+        # Write progressively: even if Colab disconnects at a later sample size,
+        # already completed and evaluated rows are available on Google Drive.
+        rows_sorted = sorted(rows, key=lambda r: r["N_train"])
+        with open(summary_table_path, "w") as f:
+            json.dump(rows_sorted, f, indent=2)
+        with open(summary_csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows_sorted[0].keys()))
+            writer.writeheader()
+            for result_row in rows_sorted:
+                writer.writerow({k: json.dumps(v) if isinstance(v, (dict, list)) else v
+                                 for k, v in result_row.items()})
+        print(f"[ORIGINAL {index}/{len(SAMPLE_SIZES)}] SAVED JSON: {summary_table_path}", flush=True)
+        print(f"[ORIGINAL {index}/{len(SAMPLE_SIZES)}] SAVED CSV:  {summary_csv_path}", flush=True)
+        plot_sample_size_sweep(rows_sorted)
+        print_sample_size_summary(rows_sorted)
+        print(f"[ORIGINAL {index}/{len(SAMPLE_SIZES)}] COMPLETE | N_train={n_train}", flush=True)
 
-    plot_sample_size_sweep(rows_sorted)
-    print_sample_size_summary(rows_sorted)
+    print("[ORIGINAL] All selected sample sizes trained, tested, summarized and saved.", flush=True)
 
 
 if __name__ == "__main__":

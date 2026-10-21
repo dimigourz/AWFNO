@@ -2,7 +2,7 @@
 
 Research code and numerical experiments for learning the evolution operators of nonlinear partial differential equations.
 
-**Current archive:** 1D viscous Burgers experiments, including AWFNO and competitive baselines, controlled architecture/order ablations, sensitivity sweeps, and sample-size studies. Other PDE benchmarks will be added as separate folders.
+**Current benchmarks:** 1D viscous Burgers and 2D annular Boussinesq (HyTeG scalar-field benchmark). Each PDE has its own numerical-experiment folder.
 
 ## Experiments
 
@@ -32,6 +32,12 @@ md5sum 1D_Burgers_Sols_Nu0.001.hdf5
 ```
 
 Copy or mount the dataset where the notebooks expect it, or update `DATA_PATH` to the downloaded file. The HDF5 dataset is not committed to GitHub.
+
+## Boussinesq annulus experiments
+
+[**Boussinesq2D/ — one-run Colab notebook, original benchmark code, and numerical documentation**](Boussinesq2D/)
+
+This suite covers the original four-model sample-size study and three-seed controlled ablations/sensitivities. Modern F-FNO, U-Net, CNO and U-NO are **not yet implemented** for annular Boussinesq.
 
 ## Numerical comparison: Burgers H10 sample-size sweep
 

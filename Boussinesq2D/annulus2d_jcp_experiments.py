@@ -1846,18 +1846,20 @@ def evaluate_on_common_test_set(bundle, U_test, test_ids):
         # synchronizing prevents asynchronous GPU kernels from corrupting timings.
         if device.type == "cuda":
             torch.cuda.synchronize()
+            torch.cuda.reset_peak_memory_stats()
         t_start = time.perf_counter()
         pred = operation()
         if device.type == "cuda":
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - t_start
-        print(f"[ORIGINAL N={n_train}] {name} full test-set rollout: {elapsed:.3f} s", flush=True)
-        return pred, elapsed
+        peak_mib = float(torch.cuda.max_memory_allocated() / 1024**2) if device.type == "cuda" else None
+        print(f"[ORIGINAL N={n_train}] {name} full test-set rollout: {elapsed:.3f} s | peak GPU allocated {peak_mib} MiB", flush=True)
+        return pred, elapsed, peak_mib
 
-    U_roll_tb, tb_infer_s = timed_full_test_rollout("TB-AWFNO", lambda: autoregressive_rollout_tb_awfno(bundle["tb_fit"]["model"], u0_test, nt, bundle["tb_predict"], True))
-    U_roll_aw, aw_infer_s = timed_full_test_rollout("AWFNO", lambda: autoregressive_rollout_direct(bundle["aw_fit"]["model"], u0_test, nt, bundle["aw_predict"], "AWFNO", True))
-    U_roll_wf, wf_infer_s = timed_full_test_rollout("WFNO", lambda: autoregressive_rollout_direct(bundle["wf_fit"]["model"], u0_test, nt, bundle["wf_predict"], "WFNO", True))
-    U_roll_fn, fn_infer_s = timed_full_test_rollout("FNO", lambda: direct_full_trajectory_prediction(bundle["fn_fit"]["model"], u0_test, nt, bundle["fn_predict"], "FNO", BATCH_SIZE))
+    U_roll_tb, tb_infer_s, tb_peak_mib = timed_full_test_rollout("TB-AWFNO", lambda: autoregressive_rollout_tb_awfno(bundle["tb_fit"]["model"], u0_test, nt, bundle["tb_predict"], True))
+    U_roll_aw, aw_infer_s, aw_peak_mib = timed_full_test_rollout("AWFNO", lambda: autoregressive_rollout_direct(bundle["aw_fit"]["model"], u0_test, nt, bundle["aw_predict"], "AWFNO", True))
+    U_roll_wf, wf_infer_s, wf_peak_mib = timed_full_test_rollout("WFNO", lambda: autoregressive_rollout_direct(bundle["wf_fit"]["model"], u0_test, nt, bundle["wf_predict"], "WFNO", True))
+    U_roll_fn, fn_infer_s, fn_peak_mib = timed_full_test_rollout("FNO", lambda: direct_full_trajectory_prediction(bundle["fn_fit"]["model"], u0_test, nt, bundle["fn_predict"], "FNO", BATCH_SIZE))
 
     print("\nTerminal errors")
     print("---------------")
@@ -1942,12 +1944,12 @@ def evaluate_on_common_test_set(bundle, U_test, test_ids):
     # Extended reporting: same test predictions and physical quadrature as above.
     # Keep original summary keys intact for backward compatibility.
     original_details = [
-        ("TB_AWFNO", tb_stats, bundle["tb_fit"]["model"], tb_infer_s, U_roll_tb),
-        ("AWFNO", aw_stats, bundle["aw_fit"]["model"], aw_infer_s, U_roll_aw),
-        ("WFNO", wf_stats, bundle["wf_fit"]["model"], wf_infer_s, U_roll_wf),
-        ("FNO", fn_stats, bundle["fn_fit"]["model"], fn_infer_s, U_roll_fn),
+        ("TB_AWFNO", tb_stats, bundle["tb_fit"]["model"], tb_infer_s, tb_peak_mib, U_roll_tb),
+        ("AWFNO", aw_stats, bundle["aw_fit"]["model"], aw_infer_s, aw_peak_mib, U_roll_aw),
+        ("WFNO", wf_stats, bundle["wf_fit"]["model"], wf_infer_s, wf_peak_mib, U_roll_wf),
+        ("FNO", fn_stats, bundle["fn_fit"]["model"], fn_infer_s, fn_peak_mib, U_roll_fn),
     ]
-    for prefix, stats, model, infer_s, rollout in original_details:
+    for prefix, stats, model, infer_s, peak_mib, rollout in original_details:
         row.update({
             f"{prefix}_full_l2_std": stats["full_l2_std"],
             f"{prefix}_full_l2_median": stats["full_l2_median"],
@@ -1956,6 +1958,8 @@ def evaluate_on_common_test_set(bundle, U_test, test_ids):
             f"{prefix}_numel_parameters": count_params(model),
             f"{prefix}_real_scalar_dof": scalar_dof(model),
             f"{prefix}_full_test_set_inference_seconds": infer_s,
+            f"{prefix}_amortized_inference_seconds_per_test_trajectory": infer_s / len(U_test),
+            f"{prefix}_peak_rollout_gpu_MiB": peak_mib,
         })
         if os.environ.get("ORIGINAL_DECOMPOSITION_DIAGNOSTICS", "1") == "1":
             diagnostics = decomposition_diagnostics(rollout, U_test)

@@ -9,7 +9,7 @@
 3. Select **Runtime → Run all**. The default executes the original sample-size sweep followed by all controlled reviewer experiments.
 4. Read results and checkpoints under **MyDrive/anus/Boussinesq_JCP**. Re-executing with FORCE_RETRAIN=False reuses finished configurations.
 
-The notebook embeds the full Python experiment engine with SHA256 checking, and writes it as /content/annulus2d_jcp_experiments.py. No additional script upload is required. [Original benchmark source](annulus2d_benchmark_original.py).
+The notebook embeds the full Python experiment engine with SHA256 checking, and writes it as /content/annulus2d_jcp_experiments.py. No additional script upload is required. Readable standalone implementation: [annulus2d_jcp_experiments.py](annulus2d_jcp_experiments.py). [Original benchmark source](annulus2d_benchmark_original.py).
 
 ## Dataset and field
 

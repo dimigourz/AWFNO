@@ -1,0 +1,15 @@
+# Model/data artifacts
+*.hdf5
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+# Experiment outputs: keep code and explicit small summaries only
+wandb/
+runs/
+checkpoints/

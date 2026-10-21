@@ -13,6 +13,26 @@ Research code and numerical experiments for learning the evolution operators of 
 | [`Burgers1D/03_Architecture_Ablations/`](Burgers1D/03_Architecture_Ablations/) | Controlled component, local/Fourier ordering, and radius/modes/window sensitivities. Includes Python experiment engine and Colab driver. |
 | [`Burgers1D/04_Competitive_Baselines/`](Burgers1D/04_Competitive_Baselines/) | F-FNO, autoregressive U-Net, and direct CNO baseline implementations. |
 
+## PDEBench dataset
+
+All Burgers 1D notebooks are configured for the PDEBench **viscous Burgers** training file with viscosity `nu = 0.001`:
+
+**[`1D_Burgers_Sols_Nu0.001.hdf5` — download exact HDF5 from PDEBench DaRUS](https://darus.uni-stuttgart.de/api/access/datafile/268190)** (~7.7 GB).
+
+- **Official dataset DOI/catalog:** [PDEBench Datasets — DOI:10.18419/DARUS-2986](https://doi.org/10.18419/DARUS-2986)
+- **PDEBench Hugging Face listing:** [`pdebench/Burgers`](https://huggingface.co/datasets/pdebench/Burgers/tree/main) (select `1D_Burgers_Sols_Nu0.001.hdf5`, **not** `Nu0.01`).
+- **DaRUS current-revision file checksum (MD5):** `44cb784d5a07aa2b1c864cabdcf625f9`. The dataset archive has older versions with a different checksum; verify your local file if reproducing these experiments.
+
+Download in Colab or another Linux environment, with sufficient disk space:
+
+```bash
+wget -O 1D_Burgers_Sols_Nu0.001.hdf5 \
+  "https://darus.uni-stuttgart.de/api/access/datafile/268190"
+md5sum 1D_Burgers_Sols_Nu0.001.hdf5
+```
+
+Copy or mount the dataset where the notebooks expect it, or update `DATA_PATH` to the downloaded file. The HDF5 dataset is not committed to GitHub.
+
 ## Numerical comparison: Burgers H10 sample-size sweep
 
 Reported **mean absolute physical L2** errors (not normalized relative L2). Individual model runs, rather than multi-seed mean ± confidence interval.

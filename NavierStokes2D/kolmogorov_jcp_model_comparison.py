@@ -938,7 +938,25 @@ def build_objects(n_train, S_train_pool, S_val):
     starts = make_window_start_indices(Nt, WINDOW_K, WINDOW_STRIDE)
     val_starts = make_window_start_indices(Nt, WINDOW_K, WINDOW_K)
     print("\nWindow starts:", starts[:10], "n=", len(starts), "val n=", len(val_starts))
-    basis, energy, sing = compute_tb_basis(S_train, starts, N_TIME_MODES)
+    # The temporal basis is a training-data object, independent of the model
+    # architecture and random initialization. Cache its COMPLETE eigensystem
+    # once per (N,K,stride), and truncate to TB ranks 6/12/18 as necessary.
+    # This avoids recomputing an expensive covariance matrix for every ablation.
+    cachebasis=Path(DATA_DIR)/f'temporal_basis_N{n_train}_K{WINDOW_K}_s{WINDOW_STRIDE}.npz'
+    if cachebasis.exists() and not DEBUG_RANDOM_BASIS:
+        with np.load(cachebasis) as cached:
+            vectors=cached['vectors']
+            sing=cached['singular_values']
+        print('[BASIS CACHE]',cachebasis,flush=True)
+    else:
+        vectors, _, sing = compute_tb_basis(S_train, starts, WINDOW_K)
+        np.savez_compressed(cachebasis,vectors=vectors,singular_values=sing)
+        print('[BASIS SAVED]',cachebasis,flush=True)
+    basis=vectors[:,:N_TIME_MODES].astype(np.float32)
+    energy=float(np.sum(sing[:N_TIME_MODES].astype(np.float64)**2)/
+                 max(np.sum(sing.astype(np.float64)**2),1e-30))
+# Temporal covariance N/K cache does not depend on parameter ablations.
+# Full-rank eigensystem is stored to Drive and safely reused across runs.
     if DEBUG_RANDOM_BASIS:
         basis = random_basis(WINDOW_K, N_TIME_MODES); energy=float("nan"); sing=np.ones(N_TIME_MODES, dtype=np.float32)
     basis_t = torch.tensor(basis, dtype=torch.float32, device=device)

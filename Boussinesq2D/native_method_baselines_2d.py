@@ -477,7 +477,13 @@ def write_summary(rows):
     all_rows={}
     old_path=OUT/"results.json"
     if old_path.is_file():
-        for record in json.loads(old_path.read_text()):
+        old_rows=json.loads(old_path.read_text())
+        if old_rows and all("training_protocol_version" not in r for r in old_rows):
+            archive=OUT/"results_v1_original_batches.json"
+            if not archive.is_file():
+                atomic_json(archive,old_rows)
+                print(f"[ARCHIVE] Original fixed-batch N25 results: {archive}",flush=True)
+        for record in old_rows:
             key=(record["model"],int(record["N_train"]),int(record["seed"]))
             record.setdefault("training_protocol_version","v1_original_batches")
             all_rows[key]=record
@@ -502,8 +508,39 @@ def run_one(name,ntrain,seed,pool,val,test,tgrid,arch_sha,base_sha):
     source_dataset=NativeDataset(pool[:ntrain],tgrid,name)
     val_dataset=NativeDataset(val,tgrid,name)
     normalizer=StateNormalizer(pool[:ntrain])
-    chosen_batch=select_batch_size(name,source_dataset,normalizer,
-                                   base.r_grid_np,base.theta_grid_np,seed)
+    # Keep exactly the same GPU-selected batch size after Colab disconnects.
+    # Otherwise small throughput fluctuations can change the checkpoint
+    # config hash and accidentally restart a multi-hour training run.
+    batch_dir=OUT/"batch_selection"
+    batch_dir.mkdir(parents=True,exist_ok=True)
+    batch_file=batch_dir/f"{VERSION}_{name}_N{ntrain}_seed{seed}.json"
+    use_batch_cache=batch_file.is_file() and os.environ.get("NATIVE_FORCE_RETRAIN","0")!="1"
+    if use_batch_cache:
+        batch_info=json.loads(batch_file.read_text())
+        use_batch_cache=(
+            batch_info.get("architecture_sha")==arch_sha
+            and batch_info.get("autotune_batch")==AUTOTUNE_BATCH
+            and batch_info.get("max_gpu_fraction")==MAX_GPU_FRACTION
+            and batch_info.get("autotune_steps")==AUTOTUNE_STEPS
+            and batch_info.get("explicit_override")==int(
+                os.environ.get("NATIVE_BATCH_"+name.upper(),"0"))
+        )
+    if use_batch_cache:
+        chosen_batch=int(batch_info["batch"])
+        print(f"[BATCH RESUME] {name} N={ntrain}: reuse batch={chosen_batch} "
+              f"from {batch_file}",flush=True)
+    else:
+        chosen_batch=select_batch_size(name,source_dataset,normalizer,
+                                       base.r_grid_np,base.theta_grid_np,seed)
+        atomic_json(batch_file,{
+            "version":VERSION,"architecture_sha":arch_sha,
+            "name":name,"n_train":ntrain,"seed":seed,
+            "autotune_batch":AUTOTUNE_BATCH,
+            "max_gpu_fraction":MAX_GPU_FRACTION,
+            "autotune_steps":AUTOTUNE_STEPS,
+            "explicit_override":int(os.environ.get("NATIVE_BATCH_"+name.upper(),"0")),
+            "batch":chosen_batch
+        })
     # Re-seed after throughput measurements for clean deterministic initialization.
     seed_everything(seed)
     generator=torch.Generator().manual_seed(seed+ntrain)
@@ -633,6 +670,17 @@ def main():
     print(f"Native baseline study: {SELECTED}, sizes={SIZES}, seeds={SEEDS}, "
           f"epochs={EPOCHS}. Dataset split train/val/test=400/30/70",flush=True)
     print("WARNING: UNO_H10 uses 10 observed truth frames; score is NOT u0-only comparable.",flush=True)
+    old_manifest=OUT/"manifest.json"
+    if old_manifest.is_file():
+        try:
+            prior=json.loads(old_manifest.read_text())
+            if prior.get("version") != VERSION:
+                historical=OUT/"manifest_v1_original_batches.json"
+                if not historical.is_file():
+                    atomic_json(historical,prior)
+                    print(f"[ARCHIVE] Previous experiment manifest: {historical}",flush=True)
+        except (ValueError,TypeError) as exc:
+            raise ValueError("Existing manifest cannot be archived safely") from exc
     atomic_json(OUT/"manifest.json",{
         "version":VERSION,"models":SELECTED,"sizes":SIZES,"seeds":SEEDS,
         "autotune_batch":AUTOTUNE_BATCH,

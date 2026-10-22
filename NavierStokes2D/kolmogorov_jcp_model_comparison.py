@@ -3,11 +3,11 @@
 """
 Kolmogorov 2D vorticity benchmark for neural-operator surrogates.
 
-The script compares four models:
+The script compares five trained models (plus persistence):
     1. TB-AWFNO: temporal-basis alternating windowed Fourier neural operator
     2. AWFNO: alternating windowed Fourier neural operator
     3. WFNO: windowed Fourier neural operator baseline
-    4. FNO: non-windowed Fourier neural operator baseline
+    4. WFNO-PM: width-adjusted parameter-matched WFNO\n    5. FNO: non-windowed full-trajectory neuraloperator FNO baseline
 
 Expected dataset:
     kolmogorov_dataset_parallel/kolmogorov_dataset.pt
@@ -91,7 +91,7 @@ GRAD_LOSS_WEIGHT = 0.0
 NORMALIZE_LOSS = True
 ENFORCE_MEAN = False
 
-FORCE_RETRAIN = False
+FORCE_RETRAIN = os.environ.get('NS_FORCE_RETRAIN','0')=='1'
 USE_SPLIT_CACHE = False
 SAVE_SPLIT_CACHE = False
 
@@ -955,8 +955,8 @@ def build_objects(n_train, S_train_pool, S_val):
     basis=vectors[:,:N_TIME_MODES].astype(np.float32)
     energy=float(np.sum(sing[:N_TIME_MODES].astype(np.float64)**2)/
                  max(np.sum(sing.astype(np.float64)**2),1e-30))
-# Temporal covariance N/K cache does not depend on parameter ablations.
-# Full-rank eigensystem is stored to Drive and safely reused across runs.
+    # Temporal covariance N/K cache does not depend on parameter ablations.
+    # Full-rank eigensystem is stored to Drive and safely reused across runs.
     if DEBUG_RANDOM_BASIS:
         basis = random_basis(WINDOW_K, N_TIME_MODES); energy=float("nan"); sing=np.ones(N_TIME_MODES, dtype=np.float32)
     basis_t = torch.tensor(basis, dtype=torch.float32, device=device)

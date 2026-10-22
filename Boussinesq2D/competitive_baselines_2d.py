@@ -43,7 +43,7 @@ WIDTH = int(os.environ.get("BASELINE_WIDTH", "32"))
 SAVE_ROLLOUTS = os.environ.get("SAVE_BASELINE_ROLLOUTS", "1") == "1"
 FORCE_RETRAIN = os.environ.get("FORCE_RETRAIN", "0") == "1"
 RESULT_ROOT = Path(os.environ.get("BASELINE_OUTPUT", str(base.OUTPUT_ROOT / "competitive_2d_K30")))
-RUN_VERSION = "annulus2d_competitive_v1"
+RUN_VERSION = "annulus2d_reference_architectures_v2"
 assert all(name in NAMES for name in BASELINES), BASELINES
 assert all(n in base.ALL_SAMPLE_SIZES for n in SIZES), SIZES
 assert min(SEEDS) >= 0 and EVAL_BATCH >= 1
@@ -98,187 +98,15 @@ class PolarConv(nn.Module):
         return self.conv(polar_pad(x, self.pad))
 
 
-class AxisFactorizedSpectral(nn.Module):
-    """Independent 1D Fourier multipliers along radius and azimuth (F-FNO)."""
-    def __init__(self, channels, modes_r, modes_t):
-        super().__init__()
-        self.mr, self.mt = int(modes_r), int(modes_t)
-        scale = 1. / (channels ** 2) ** .5
-        self.weight_r = nn.Parameter(scale * torch.randn(channels, channels, self.mr, dtype=torch.cfloat))
-        self.weight_t = nn.Parameter(scale * torch.randn(channels, channels, self.mt, dtype=torch.cfloat))
-    def forward(self, x):
-        B, C, nr, nt = x.shape
-        fr = torch.fft.rfft(x, dim=-2, norm="ortho")
-        nr_modes = min(self.mr, nr // 2 + 1)
-        yr = torch.zeros((B, C, nr // 2 + 1, nt), device=x.device, dtype=fr.dtype)
-        yr[:, :, :nr_modes] = torch.einsum(
-            "birt,ior->bort", fr[:, :, :nr_modes], self.weight_r[:, :, :nr_modes])
-        yr = torch.fft.irfft(yr, n=nr, dim=-2, norm="ortho")
-
-        ft = torch.fft.rfft(x, dim=-1, norm="ortho")
-        nt_modes = min(self.mt, nt // 2 + 1)
-        yt = torch.zeros((B, C, nr, nt // 2 + 1), device=x.device, dtype=ft.dtype)
-        yt[:, :, :, :nt_modes] = torch.einsum(
-            "birm,iom->borm", ft[:, :, :, :nt_modes], self.weight_t[:, :, :nt_modes])
-        yt = torch.fft.irfft(yt, n=nt, dim=-1, norm="ortho")
-        return yr + yt
-
-
-class FFNOBlock(nn.Module):
-    def __init__(self, width, mr, mt):
-        super().__init__()
-        self.spectral = AxisFactorizedSpectral(width, mr, mt)
-        self.pointwise = nn.Conv2d(width, width, 1)
-        self.mlp = nn.Sequential(nn.Conv2d(width, width * 2, 1), nn.GELU(),
-                                 nn.Conv2d(width * 2, width, 1))
-    def forward(self, x):
-        return x + self.mlp(F.gelu(self.spectral(x) + self.pointwise(x)))
-
-
-class FFNO2D(nn.Module):
-    """Fourier-factorized, residual 2D windowed operator (adaptation of Tran et al.)."""
-    def __init__(self, k, r, theta, width=WIDTH):
-        super().__init__()
-        self.coords = PolarInput(r, theta)
-        self.lift = nn.Conv2d(4, width, 1)
-        self.blocks = nn.Sequential(*[FFNOBlock(width, 16, 24) for _ in range(6)])
-        self.head = nn.Sequential(nn.Conv2d(width, 128, 1), nn.GELU(), nn.Conv2d(128, k, 1))
-    def forward(self, u):
-        x = self.blocks(self.lift(self.coords(u)))
-        return self.head(x).permute(0, 2, 3, 1).contiguous()
-
-
-class UNetBlock(nn.Module):
-    def __init__(self, ci, co):
-        super().__init__()
-        self.seq = nn.Sequential(PolarConv(ci, co), nn.GELU(), PolarConv(co, co), nn.GELU())
-    def forward(self, x):
-        return self.seq(x)
-
-
-class UNet2D(nn.Module):
-    """Conventional U-Net with pooling, learned convolutions and skip connections."""
-    def __init__(self, k, r, theta, width=WIDTH):
-        super().__init__()
-        self.coords = PolarInput(r, theta)
-        self.e0 = UNetBlock(4, width)
-        self.e1 = UNetBlock(width, 2 * width)
-        self.e2 = UNetBlock(2 * width, 4 * width)
-        self.bottleneck = UNetBlock(4 * width, 4 * width)
-        self.d1 = UNetBlock(6 * width, 2 * width)
-        self.d0 = UNetBlock(3 * width, width)
-        self.head = nn.Conv2d(width, k, 1)
-    def forward(self, u):
-        e0 = self.e0(self.coords(u))
-        e1 = self.e1(F.max_pool2d(e0, 2))
-        e2 = self.e2(F.max_pool2d(e1, 2))
-        z = self.bottleneck(e2)
-        z = self.d1(torch.cat((F.interpolate(z, size=e1.shape[-2:], mode="bilinear", align_corners=False), e1), dim=1))
-        z = self.d0(torch.cat((F.interpolate(z, size=e0.shape[-2:], mode="bilinear", align_corners=False), e0), dim=1))
-        return self.head(z).permute(0, 2, 3, 1).contiguous()
-
-
-class LowPass2D(nn.Module):
-    """Fixed binomial low-pass filter with periodic theta and replicated radial boundary."""
-    def __init__(self):
-        super().__init__()
-        v = torch.tensor([1, 4, 6, 4, 1], dtype=torch.float32) / 16.
-        self.register_buffer("kernel", torch.outer(v, v).reshape(1, 1, 5, 5))
-    def forward(self, x):
-        return F.conv2d(polar_pad(x, 2), self.kernel.to(dtype=x.dtype).expand(x.shape[1], 1, 5, 5),
-                        groups=x.shape[1])
-
-
-class FilteredActivation(nn.Module):
-    """Oversample -> nonlinear activation -> low-pass -> resample."""
-    def __init__(self):
-        super().__init__()
-        self.lp = LowPass2D()
-    def forward(self, x):
-        original = x.shape[-2:]
-        z = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
-        z = self.lp(F.gelu(z))
-        return F.interpolate(z, size=original, mode="bilinear", align_corners=False, antialias=True)
-
-
-class CNOBlock(nn.Module):
-    def __init__(self, ci, co):
-        super().__init__()
-        self.first = PolarConv(ci, co)
-        self.activation = FilteredActivation()
-        self.second = PolarConv(co, co)
-    def forward(self, x):
-        return self.activation(self.second(self.activation(self.first(x))))
-
-
-class CNODown(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.lp = LowPass2D()
-    def forward(self, x):
-        return self.lp(x)[:, :, ::2, ::2]
-
-
-class CNO2D(nn.Module):
-    """CNO-style filtered multiresolution CNN (research adaptation; not official CNO)."""
-    def __init__(self, k, r, theta, width=WIDTH):
-        super().__init__()
-        self.coords = PolarInput(r, theta)
-        self.e0 = CNOBlock(4, width)
-        self.down = CNODown()
-        self.e1 = CNOBlock(width, 2 * width)
-        self.e2 = CNOBlock(2 * width, 4 * width)
-        self.bottleneck = CNOBlock(4 * width, 4 * width)
-        self.d1 = CNOBlock(6 * width, 2 * width)
-        self.d0 = CNOBlock(3 * width, width)
-        self.head = nn.Conv2d(width, k, 1)
-    def forward(self, u):
-        e0 = self.e0(self.coords(u))
-        e1 = self.e1(self.down(e0))
-        e2 = self.e2(self.down(e1))
-        z = self.bottleneck(e2)
-        z = self.d1(torch.cat((F.interpolate(z, size=e1.shape[-2:], mode="bilinear", align_corners=False), e1), 1))
-        z = self.d0(torch.cat((F.interpolate(z, size=e0.shape[-2:], mode="bilinear", align_corners=False), e0), 1))
-        return self.head(z).permute(0, 2, 3, 1).contiguous()
-
-
-class UNOBlock(nn.Module):
-    """Multi-resolution residual Fourier operator block."""
-    def __init__(self, cin, cout, mr, mt):
-        super().__init__()
-        self.lift = nn.Conv2d(cin, cout, 1)
-        self.spec = base.SpectralConv2d(cout, cout, mr, mt)
-        self.pw = nn.Conv2d(cout, cout, 1)
-    def forward(self, x):
-        z = self.lift(x)
-        return z + F.gelu(self.spec(z) + self.pw(z))
-
-
-class UNO2D(nn.Module):
-    """U-shaped Fourier neural operator with spectral encoder-decoder + skip connections."""
-    def __init__(self, k, r, theta, width=WIDTH):
-        super().__init__()
-        self.coords = PolarInput(r, theta)
-        self.entry = nn.Conv2d(4, width, 1)
-        self.e0 = UNOBlock(width, width, 16, 24)
-        self.e1 = UNOBlock(width, 2 * width, 12, 20)
-        self.e2 = UNOBlock(2 * width, 4 * width, 6, 12)
-        self.d1 = UNOBlock(6 * width, 2 * width, 12, 20)
-        self.d0 = UNOBlock(3 * width, width, 16, 24)
-        self.head = nn.Sequential(nn.Conv2d(width, 128, 1), nn.GELU(), nn.Conv2d(128, k, 1))
-    def forward(self, u):
-        x = self.entry(self.coords(u))
-        e0 = self.e0(x)
-        e1 = self.e1(F.interpolate(e0, scale_factor=.5, mode="bilinear", align_corners=False))
-        e2 = self.e2(F.interpolate(e1, scale_factor=.5, mode="bilinear", align_corners=False))
-        d1 = self.d1(torch.cat((F.interpolate(e2, size=e1.shape[-2:], mode="bilinear", align_corners=False), e1), 1))
-        d0 = self.d0(torch.cat((F.interpolate(d1, size=e0.shape[-2:], mode="bilinear", align_corners=False), e0), 1))
-        return self.head(d0).permute(0, 2, 3, 1).contiguous()
+# Faithful publication-oriented models are isolated in a readable module.
+# The previous ad-hoc F-FNO/CNO/U-Net/U-NO approximations are intentionally
+# removed. CNO/U-Net are adapted from the project's Cahn–Hilliard baselines;
+# U-NO uses neuraloperator's maintained UNO class.
+from reference_architectures_2d import make_reference_model
 
 
 def make_model(name, r, theta):
-    constructors = {"FFNO": FFNO2D, "CNO": CNO2D, "UNet": UNet2D, "UNO": UNO2D}
-    return constructors[name](base.WINDOW_K, r, theta, WIDTH)
+    return make_reference_model(name, base.WINDOW_K, r, theta, WIDTH)
 
 
 def param_stats(model):
@@ -489,6 +317,7 @@ def main():
     print(f"Original evaluation: K={base.WINDOW_K}, Nr×Ntheta=64×128, N_test=70", flush=True)
     print(f"GPU: {base.device}, epochs={base.EPOCHS}, batch={base.BATCH_SIZE}", flush=True)
     original_sha = hashlib.sha256(Path(base.__file__).read_bytes()).hexdigest()
+    architecture_sha = hashlib.sha256(Path(__import__("reference_architectures_2d").__file__).read_bytes()).hexdigest()
     U, r, theta, t, sample_ids = base.load_annulus_dataset(base.DATA_PATH)
     base.set_geometry_from_arrays(U.shape, r, theta, t)
     pool, trids, Uval, vids, Utest, teids = base.make_train_val_test_splits(U)
@@ -505,6 +334,7 @@ def main():
         "dataset": str(base.DATA_PATH),
         "dataset_bytes": base.DATA_PATH.stat().st_size,
         "original_driver_sha256": original_sha,
+        "reference_architecture_sha256": architecture_sha,
         "training": dict(optimizer="AdamW", lr=base.LR, wd=base.WEIGHT_DECAY,
                          scheduler="CosineAnnealingLR", epochs=base.EPOCHS,
                          batch_size=base.BATCH_SIZE, loss="physical-output MSE",
@@ -527,7 +357,7 @@ def main():
                     "version": RUN_VERSION, "model": name, "n": ntrain, "seed": seed,
                     "K": 30, "epochs": base.EPOCHS, "batch_size": base.BATCH_SIZE,
                     "lr": base.LR, "wd": base.WEIGHT_DECAY, "width": WIDTH,
-                    "original_driver": original_sha, "dataset_size": base.DATA_PATH.stat().st_size
+                    "original_driver": original_sha, "reference_architecture": architecture_sha, "dataset_size": base.DATA_PATH.stat().st_size
                 }
                 tag = base.short_hash(cfg)
                 dest = RESULT_ROOT / name / f"N{ntrain}_seed{seed}_cfg{tag}"

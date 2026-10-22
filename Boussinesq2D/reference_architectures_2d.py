@@ -35,12 +35,21 @@ class StateAndCoordinates(nn.Module):
         return torch.cat((u[:,None],self.grid.expand(u.shape[0],-1,-1,-1)),dim=1)
 
 
+class WNLinear(nn.Module):
+    """FourierFlow-style weight-normalized linear projection."""
+    def __init__(self, ci, co):
+        super().__init__()
+        self.layer = nn.utils.parametrizations.weight_norm(nn.Linear(ci, co))
+    def forward(self, x):
+        return self.layer(x)
+
+
 class ReferenceFFNOSpectralLayer(nn.Module):
     """FourierFlow 2D separable Fourier layer, with a pointwise backcast network."""
     def __init__(self,width,factor=4):
         super().__init__()
-        self.backcast = nn.Sequential(nn.Linear(width,width*factor),nn.ReLU(),
-                                      nn.Linear(width*factor,width))
+        self.backcast = nn.Sequential(WNLinear(width,width*factor),nn.ReLU(),
+                                      WNLinear(width*factor,width))
     def forward(self,x,weight_r,weight_theta):
         # x: (B,R,Theta,C). Spectral weights are shared across all layers.
         yc=x.permute(0,3,1,2).contiguous()
@@ -66,7 +75,7 @@ class FFNO2D(nn.Module):
     def __init__(self,k,r,theta,width=64,depth=24,modes_r=16,modes_theta=16):
         super().__init__()
         self.coords=StateAndCoordinates(r,theta)
-        self.in_proj=nn.utils.parametrizations.weight_norm(nn.Linear(4,width))
+        self.in_proj=WNLinear(4,width)
         # Weight sharing across all 24 Fourier layers is deliberate and matches
         # the reference FourierFlow-style residual factorized architecture.
         self.weight_r=nn.Parameter(torch.view_as_complex(
@@ -74,7 +83,7 @@ class FFNO2D(nn.Module):
         self.weight_theta=nn.Parameter(torch.view_as_complex(
             torch.nn.init.xavier_normal_(torch.empty(width,width,modes_theta,2),gain=.1).contiguous()))
         self.layers=nn.ModuleList([ReferenceFFNOSpectralLayer(width) for _ in range(depth)])
-        self.head=nn.Sequential(nn.Linear(width,128),nn.Linear(128,k))
+        self.head=nn.Sequential(WNLinear(width,128),WNLinear(128,k))
     def forward(self,u):
         with torch.autocast(device_type=u.device.type,enabled=False):
             x=self.coords(u.float()).permute(0,2,3,1)

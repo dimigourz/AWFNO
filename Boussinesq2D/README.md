@@ -27,6 +27,20 @@ Recorded for **TB-AWFNO / AWFNO / WFNO / FNO**: full/final absolute physical L2 
 
 The Colab launcher now streams training output live, saves `original_stdout.log` and `rebuttal_stdout.log`, and prints a heartbeat when there has been no output. Reopen the GitHub Colab link to obtain this version; an already running kernel will continue to run its previously loaded script.
 
+## Next comparison: F-FNO, CNO-style, U-Net and U-NO-style
+
+**[Open competitive baseline Colab](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)** · [Read the complete Python source](competitive_baselines_2d.py)
+
+The four networks are *separate implementations*: (i) factorized 1D spectral convolutions along the radial and azimuthal axes with residual blocks (F-FNO), (ii) a filtered, multiresolution convolutional encoder-decoder with upsample–nonlinearity–low-pass stages (CNO-style), (iii) a conventional convolutional U-Net, and (iv) a U-shaped spectral-operator encoder-decoder with skip connections (U-NO-style).
+
+**Protocol held fixed:** identical original dataset `hyteg_annulus_c_grid_64x128_samples500.pt`, disjoint train/val/test partition **400/30/70**, sample-size sweep `25,50,100,200,400`, one observed scalar field, predictions of the next **K=30** frames, autoregressive 100-step rollout from true initial state only, 150 epochs, training-only Gaussian normalizers, absolute physical annular L2 metrics. For these new baselines, the training recipe is common: AdamW + cosine annealing, MSE with zero auxiliary final loss, gradient clipping at norm 1 and best validation-window-L2 checkpoint. The original AWFNO sample-size results are imported only for plotting, not retrained.
+
+**Numerical outputs:** an incremental `competitive_2d_K30/results.csv` + JSON; model checkpoints; loss/validation curves; full/final mean, SD, median; error versus time; frequency- and sharp-region errors; test-case CSVs; best/worst annulus visualizations; train and inference seconds; trainable tensor elements and real scalar degrees of freedom; allocated peak inference GPU memory; optional full-test rollout arrays. These are saved independently from the original and ablation folders. `BASELINE_SEEDS=1234` by default, with additional seeds configurable. The Colab notebook runs forward/backward smoke tests before training and can disconnect after finishing.
+
+**Attribution and limits:** These implementations are **research adaptations**, not verbatim code releases by the original researchers. F-FNO follows the central factorized Fourier design of [Tran et al. (ICLR 2023)](https://openreview.net/forum?id=tmIiMPl4IPa); the **CNO-style** network uses alias-reducing spatial filtering inspired by [Raonić et al. (NeurIPS 2023)](https://arxiv.org/abs/2302.01178), but does **not** establish the exact continuous-discrete equivalence of the authors' CNO; and the **U-NO-style** network is a multiresolution spectral U architecture inspired by [Rahman, Ross & Azizzadenesheli (2022)](https://arxiv.org/abs/2204.11127). The U-Net is a standard discretization-dependent image-to-image baseline. **Do not describe CNO-style or U-NO-style results as the original implementations without verifying against their reference repositories.** There is no parameter- or compute-matched claim across the four different models.
+
+These training runs have **not** been executed on the production HyTeG dataset by ChatGPT; no numerical performance is asserted until the Colab runs complete.
+
 ## Implemented experimental coverage
 
 | Suite | Methods / diagnostics |
@@ -41,6 +55,6 @@ The Colab launcher now streams training output live, saves `original_stdout.log`
 
 Controlled runs use N=400 with seeds 1234,1235,1236 and write trial JSON plus results.csv. The notebook produces results_aggregated_by_seed.csv. The original sample-size sweep is **not** replicated across multiple seeds.
 
-**Not yet implemented here:** F-FNO, autoregressive U-Net, CNO or U-NO. These must be implemented as genuine separate architectures before claiming completeness of modern competitive baselines.
+**Separate competitive implementations now available above:** F-FNO, U-Net, CNO-style and U-NO-style. The original one-run ablation notebook does not execute these baselines automatically. CNO and U-NO reference-implementation parity and numerical results remain outstanding.
 
 The production dataset is not included and was unavailable to rerun in this environment; the controlled driver passed a synthetic annulus smoke test. The original FNO dependency is pinned to neuraloperator==2.0.0. Check metric definitions, exact temporal conditioning, and hardware when making quantitative cross-method comparisons.

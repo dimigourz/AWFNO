@@ -283,6 +283,85 @@ class UNO2D(nn.Module):
         return self.network(self.coords(u)).permute(0,2,3,1).contiguous()
 
 
+
+class CNO2D_DirectTime(CNO2D):
+    """Cahn–Hilliard CNO-Direct(t) adaptation for 64×128 annular data.
+
+    A single scalar time query enters as an additional constant input channel.
+    Each call returns one scalar field at that time, with NO rollout and NO
+    output windows. The CNO encoder/decoder backbone is unchanged.
+    """
+    def __init__(self, r, theta):
+        super().__init__(1, r, theta)
+        self.lift = CNOLiftProject(5, 16, (len(r), len(theta)))
+
+    def forward(self, u0, t_query):
+        # Normalized physical time [0,1], never a future state.
+        assert u0.ndim == 3 and t_query.ndim == 1
+        z = self.coords(u0)
+        B, _, nr, nth = z.shape
+        t_channel = t_query[:, None, None, None].expand(B, 1, nr, nth)
+        x = self.lift(torch.cat((z, t_channel), dim=1))
+        skip = []
+        for i in range(self.n_layers):
+            skip.append(self.res_nets[i](x))
+            # As in the Cahn–Hilliard official-simplified CNO port:
+            # the residual path forms the skip, downsampling acts on x.
+            x = self.encoder[i](x)
+        x = self.neck(x)
+        for i in range(self.n_layers):
+            if i == 0:
+                x = self.skip_expansion[self.n_layers](x)
+            else:
+                x = torch.cat((x, self.skip_expansion[self.n_layers-i](skip[-i])), dim=1)
+            x = self.decoder[i](x)
+        x = torch.cat((x, self.skip_expansion[0](skip[0])), dim=1)
+        return self.project(x).squeeze(1)
+
+
+class UNO2D_H10(nn.Module):
+    """Library 2D U-NO with ten observed states, one-step output.
+
+    Matches the H10->H1 autoregressive *information protocol* of the
+    separately archived Burgers UNO1D_H10. It is NOT information-matched
+    to AWFNO/u0-only baselines; t=0,...,9 are supplied as ground truth.
+    """
+    def __init__(self, r, theta, width=32, history=10):
+        super().__init__()
+        from neuralop.models import UNO as NeuralopUNO
+        self.history = int(history)
+        self.register_buffer("grid", polar_coordinates(r, theta), persistent=False)
+        self.network = NeuralopUNO(
+            in_channels=self.history + 3, out_channels=1,
+            hidden_channels=width, lifting_channels=64, projection_channels=64,
+            positional_embedding=None, n_layers=5,
+            fno_skip="linear", channel_mlp_skip="linear",
+            uno_out_channels=[width,2*width,4*width,2*width,width],
+            uno_n_modes=[[16,24],[12,20],[6,12],[12,20],[16,24]],
+            uno_scalings=[[1.,1.],[.5,.5],[.5,.5],[2.,2.],[2.,2.]],
+            horizontal_skips_map={4:0,3:1},
+        )
+
+    def forward(self, history):
+        if history.ndim != 4 or history.shape[-1] != self.history:
+            raise ValueError(f"Expected (B,Nr,Ntheta,{self.history}), got {tuple(history.shape)}")
+        x = history.permute(0,3,1,2).contiguous()
+        x = torch.cat((x,self.grid.expand(x.shape[0],-1,-1,-1)),dim=1)
+        return self.network(x).squeeze(1)
+
+
+def make_native_model(name, r, theta, uno_width=32):
+    if name == "FFNO":
+        return FFNO2D(1, r, theta, width=64, depth=24, modes_r=16, modes_theta=16)
+    if name == "CNO":
+        return CNO2D_DirectTime(r, theta)
+    if name == "UNet":
+        return UNet2D(1, r, theta, width=32)
+    if name == "UNO":
+        return UNO2D_H10(r, theta, width=uno_width, history=10)
+    raise ValueError(name)
+
+
 def make_reference_model(name,k,r,theta,width=32):
     if name=="FFNO":return FFNO2D(k,r,theta)
     if name=="CNO":return CNO2D(k,r,theta)

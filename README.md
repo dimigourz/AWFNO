@@ -2,7 +2,11 @@
 
 Research code and numerical experiments for learning the evolution operators of nonlinear partial differential equations.
 
-**Current benchmarks:** 1D viscous Burgers and 2D annular Boussinesq (HyTeG scalar-field benchmark). Each PDE has its own numerical-experiment folder.
+**Current benchmarks:** 1D viscous Burgers, 2D annular Boussinesq (HyTeG scalar-field benchmark), and 2D Kolmogorov Navier–Stokes vorticity. Each PDE has its own numerical-experiment folder.
+
+## Navier–Stokes Kolmogorov flow (JCP)
+
+[**Corrected 101-frame, five-model comparative and controlled ablation Colab**](NavierStokes2D/Kolmogorov_NS_JCP_Original_Five_Model_Colab.ipynb) — independently compares TB-AWFNO, AWFNO, standard WFNO, real-parameter-matched WFNO, and native full-trajectory FNO at 25/50/100/200 training trajectories, then runs validation-only ordering/component/K/mode/radius/depth/temporal-basis ablations. [Full benchmark protocol and output table paths](NavierStokes2D/README.md). Original verified dataset and earlier 22-run exploration remain unchanged; **do not conflate old exploratory validation errors with the new five-model test table**.
 
 ## Experiments
 

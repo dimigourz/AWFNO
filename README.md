@@ -37,7 +37,7 @@ Copy or mount the dataset where the notebooks expect it, or update `DATA_PATH` t
 
 [**Boussinesq2D/ — one-run Colab notebook, original benchmark code, and numerical documentation**](Boussinesq2D/)
 
-This folder contains the original four-model sample-size study, the three-seed controlled architectural experiments, and a **separate competitive-baseline Colab** for F-FNO, U-Net, CNO-style and U-NO-style research adaptations. The newly added competitive baselines have not yet been trained on the production dataset.
+This folder contains the original four-model sample-size study, the three-seed controlled architectural experiments, and a **separate competitive-baseline Colab** for FourierFlow/Cahn–Hilliard-style F-FNO, a CNO simplified-reference backbone, a four-level U-Net, and the actual `neuralop.models.UNO` library architecture. All four use an adapted K=30 annular prediction head. The new baselines have **not** been trained on the production dataset.
 
 ## Numerical comparison: Burgers H10 sample-size sweep
 

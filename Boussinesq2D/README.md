@@ -27,6 +27,28 @@ Recorded for **TB-AWFNO / AWFNO / WFNO / FNO**: full/final absolute physical L2 
 
 The Colab launcher now streams training output live, saves `original_stdout.log` and `rebuttal_stdout.log`, and prints a heartbeat when there has been no output. Reopen the GitHub Colab link to obtain this version; an already running kernel will continue to run its previously loaded script.
 
+## Method-faithful competitive experiments (primary JCP comparison)
+
+**[Launch NEW native-method Colab](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb)** · [Native training and evaluation source](native_method_baselines_2d.py) · [Architectures](reference_architectures_2d.py)
+
+This suite corrects a **material protocol error** in the earlier K30 comparisons: windowed prediction is the AWFNO contribution, not the baseline methods' standard temporal formulations.
+
+| Model | Established prediction formulation | Training examples/trajectory | True observations required at test |
+|---|---|---:|---:|
+| **AWFNO** | *Proposed method*: windowed, **K=30** | 3 window starts | 1 initial field |
+| **F-FNO** | **One-step** recurrent map u(t)->u(t+dt) (FourierFlow/Cahn–Hilliard) | 100 adjacent pairs | 1 initial field |
+| **U-Net** | **One-step** recurrent map (Cahn–Hilliard/Burgers) | 100 adjacent pairs | 1 initial field |
+| **CNO** | **Direct-time** operator (u0,t)->u(t), queried at 100 times (Cahn–Hilliard) | 100 time-query pairs | 1 initial field |
+| **U-NO-H10** | **Ten-frame history -> next frame**, autoregressive (our earlier Burgers UNO-H10) | 91 history/target pairs | **10 initial fields** |
+
+*IMPORTANT INFORMATION MATCHING:* U-NO-H10 has additional observed input fields u1,...,u9 unavailable to the other models, and cannot be ranked as an initial-state-only competitor. **Its full-trajectory L2 is deliberately omitted**, since those observed frames must not be counted as prediction. All five models can be evaluated on a common post-t10 interval, but even this does not equalize input information. Its final-time metric is presented explicitly as **H10 conditioned**, and should be in a distinct table/panel.
+
+The native models use the original 64×128×101 HyTeG dataset, disjoint 400/30/70 trajectory partitions, and the **original annulus physical absolute-L2 quadrature**, but **NOT** the K30 windows used by AWFNO. Like the Cahn–Hilliard baselines, these models optimize pairwise or time-query targets and use model-specific batch sizes, learning rates, and weight decay. They use 200 epochs by default, validation every ten epochs, best-val checkpoint selection, checkpoint/resume every ten epochs, and **float32 FFT for F-FNO**.
+
+**Training cost:** At N=400, the F-FNO one-step method has 40,000 train pairs/epoch, batch size 8, and 200 epochs, or **one million optimizer updates**, versus 5,700 updates for the earlier K30 architecture-adaptation test. Start with N=25 and confirm learning curves and memory before the full sweep.
+
+This new study saves to **`MyDrive/anus/Boussinesq_JCP/native_reference_2d/`**, independent of all prior runs. The earlier [K30 comparison Colab](Competitive_Baselines_2D_Colab.ipynb) and results under `competitive_2d_K30/` are retained **only as K30 protocol adaptations**, not as evidence of each baseline's established temporal formulation. **No numerical results from native-method runs are claimed before execution.**
+
 ## Modern competitive models — reference-oriented, Cahn–Hilliard-verified backbones
 
 **[Launch updated Colab](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)** · [Training and evaluation driver](competitive_baselines_2d.py) · [Readable reference-style architectures](reference_architectures_2d.py)

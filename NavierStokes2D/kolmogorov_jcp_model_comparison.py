@@ -35,7 +35,7 @@ Primary metric:
     absolute physical L2 error.
 """
 
-import os, gc, json, copy, time, random, hashlib
+import os, gc, json, copy, time, random, hashlib, csv
 from pathlib import Path
 from collections import OrderedDict
 
@@ -961,6 +961,84 @@ def build_objects(n_train, S_train_pool, S_val):
             "train_loader": train_loader, "val_loader": val_loader,
             "train_full_loader": train_full_loader, "val_full_loader": val_full_loader, "normer": normer}
 
+
+def _checkpoint_fit(model,train_loader,val_loader,predict,normer,kind,path,is_full=False):
+    """Boussinesq-style epoch training with resumable optimizer state and Drive logs.
+    Validation is WINDOW loss for windowed models, FULL direct-time loss for FNO.
+    Independent physical-space rollouts are calculated in the evaluation routine.
+    """
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    optimizer=torch.optim.AdamW(model.parameters(),lr=LR,weight_decay=WEIGHT_DECAY)
+    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=EPOCHS,
+                                                         eta_min=LR*.03)
+    meta={'kind':kind,'epochs':EPOCHS,'k':WINDOW_K,'basis_rank':N_TIME_MODES,
+          'modes':(MODES_X,MODES_Y),'radius':LOCAL_RADIUS,'layers':N_LAYERS,
+          'batch':BATCH_SIZE,'width':WIDTH,'seed':SEED,'data_hash':os.environ.get(
+          'NS_DATA_SHA','7030bc43e6331cdf472182ae0ed4f2684c18da8d336ca9ed92c37baf0bfc8a06')}
+    epoch0=0;best=float('inf');best_model=None;elapsed=0.
+    hist={'train_loss':[],'train_l2':[],'val_loss':[],'val_l2':[],
+          'val_final_l2':[]}
+    if path.exists() and not FORCE_RETRAIN:
+        try:state=torch.load(path,map_location='cpu',weights_only=False)
+        except TypeError:state=torch.load(path,map_location='cpu')
+        assert state['config']==meta, 'Checkpoint configuration mismatch: '+str(path)
+        model.load_state_dict(state['weights'])
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        epoch0=int(state['epoch']);best=float(state['best'])
+        best_model=state['best_model'];hist=state['history'];elapsed=float(state['elapsed'])
+        if 'rng_cpu' in state:torch.set_rng_state(state['rng_cpu'])
+        if 'rng_cuda' in state and state['rng_cuda'] is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(state['rng_cuda'])
+        if 'shuffle_generator' in state and train_loader.generator is not None:
+            train_loader.generator.set_state(state['shuffle_generator'])
+        print(f'[RESUME] {kind} epoch {epoch0}/{EPOCHS}',flush=True)
+    since=time.perf_counter()
+    for ep in range(epoch0+1,EPOCHS+1):
+        if is_full:
+            tr=train_epoch_full(model,train_loader,optimizer,predict,normer)
+            va=eval_epoch_full(model,val_loader,predict,normer)
+        else:
+            tr=train_epoch_windowed(model,train_loader,optimizer,predict,normer,kind)
+            va=eval_epoch_windowed(model,val_loader,predict,normer,kind)
+        scheduler.step()
+        for h,key in [('train_loss','loss'),('train_l2','abs_l2')]:
+            hist[h].append(float(tr[key]))
+        for h,key in [('val_loss','loss'),('val_l2','abs_l2'),('val_final_l2','final_l2')]:
+            hist[h].append(float(va[key]))
+        if va['abs_l2']<best:
+            best=float(va['abs_l2'])
+            best_model={k:v.detach().cpu().clone() for k,v in model.state_dict().items()}
+        print(f'[EPOCH] {kind}: {ep}/{EPOCHS} train={tr["loss"]:.4e}, '
+              f'val={va["loss"]:.4e}, val_window_full_L2={va["abs_l2"]:.4f}, '
+              f'best={best:.4f}; elapsed={(elapsed+time.perf_counter()-since)/60:.1f}min',
+              flush=True)
+        if ep==1 or ep%5==0 or ep==EPOCHS:
+            if torch.cuda.is_available():torch.cuda.synchronize()
+            state={'config':meta,'epoch':ep,
+                   'weights':{k:v.detach().cpu().clone()
+                              for k,v in model.state_dict().items()},
+                   'optimizer':optimizer.state_dict(),'scheduler':scheduler.state_dict(),
+                   'best':best,'best_model':best_model,'history':hist,
+                   'elapsed':elapsed+time.perf_counter()-since,
+                   'rng_cpu':torch.get_rng_state(),
+                   'rng_cuda':torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                   'shuffle_generator':train_loader.generator.get_state()
+                       if train_loader.generator is not None else None}
+            temporary=path.with_suffix('.tmp')
+            torch.save(state,temporary);temporary.replace(path)
+        # Epoch-based patience, similar to Boussinesq, with warm-up.
+        if ep>=60 and len(hist['val_l2'])>=26:
+            recent=hist['val_l2'][-25:]
+            if min(recent)>=min(hist['val_l2'][:-25]):
+                print('[EARLY STOP] no new validation best for 25 epochs',flush=True)
+                break
+    if best_model is None:raise RuntimeError('Never validated '+kind)
+    model.load_state_dict(best_model)
+    return {'model':model,'best_val_l2':best,
+            'train_time_sec':elapsed+time.perf_counter()-since,'history':hist}
+
+
 def train_models(n_train, S_train_pool, S_val):
     tag = base_tag(n_train)
     print("\n"+"="*80); print(f"TRAINING N_train={n_train} | tag={tag}"); print("="*80)
@@ -995,7 +1073,9 @@ def train_models(n_train, S_train_pool, S_val):
             fits[name]={"model": models[name], "best_val_l2": meta.get("best_val_l2", float("nan")),
                         "train_time_sec": meta.get("train_time_sec", 0.0), "history": meta.get("history")}
         else:
-            fits[name]=fit_windowed(models[name], obj["train_loader"], obj["val_loader"], preds[name], normer, name)
+            fits[name]=_checkpoint_fit(models[name],obj['train_loader'],obj['val_loader'],
+                                       preds[name],normer,name,
+                                       Path(MODEL_DIR)/f'N{n_train}_{name}_{tag}.training.pt')
             save_model_checkpoint(path, fits[name]["model"], {k:v for k,v in fits[name].items() if k!="model"})
         if fits[name]["history"] is not None: plot_training_curves(fits[name]["history"], f"N{n_train}_{name}", tag)
     name="FNO"; path=os.path.join(MODEL_DIR, f"N{n_train}_{name}_{tag}.pt"); paths[name]=path
@@ -1004,7 +1084,10 @@ def train_models(n_train, S_train_pool, S_val):
         fits[name]={"model": models[name], "best_val_l2": meta.get("best_val_l2", float("nan")),
                     "train_time_sec": meta.get("train_time_sec", 0.0), "history": meta.get("history")}
     else:
-        fits[name]=fit_full(models[name], obj["train_full_loader"], obj["val_full_loader"], preds[name], normer)
+        fits[name]=_checkpoint_fit(models[name],obj['train_full_loader'],
+                                  obj['val_full_loader'],preds[name],normer,'FNO',
+                                  Path(MODEL_DIR)/f'N{n_train}_FNO_{tag}.training.pt',
+                                  is_full=True)
         save_model_checkpoint(path, fits[name]["model"], {k:v for k,v in fits[name].items() if k!="model"})
     if fits[name]["history"] is not None: plot_training_curves(fits[name]["history"], f"N{n_train}_{name}", tag)
     return {"n_train": n_train, "tag": tag, "objects": obj, "models": models, "predict": preds, "fits": fits, "paths": paths}
@@ -1012,12 +1095,24 @@ def train_models(n_train, S_train_pool, S_val):
 def evaluate(bundle, S_test, test_idx):
     tag=bundle["tag"]; n_train=bundle["n_train"]
     print("\n"+"="*80); print(f"EVALUATION N_train={n_train} on common test set"); print("="*80)
-    R={}
-    R["TB-AWFNO"] = rollout_tb(bundle["fits"]["TB-AWFNO"]["model"], S_test, bundle["predict"]["TB-AWFNO"])
-    R["AWFNO"] = rollout_direct(bundle["fits"]["AWFNO"]["model"], S_test, bundle["predict"]["AWFNO"], "AWFNO")
-    R["WFNO"] = rollout_direct(bundle["fits"]["WFNO"]["model"], S_test, bundle["predict"]["WFNO"], "WFNO")
-    R["WFNO-PM"] = rollout_direct(bundle["fits"]["WFNO-PM"]["model"], S_test, bundle["predict"]["WFNO-PM"], "WFNO-PM")
-    R["FNO"] = predict_full(bundle["fits"]["FNO"]["model"], S_test, bundle["predict"]["FNO"])
+    R={};timings={};peaks={}
+    def timed(name,fn):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize();torch.cuda.reset_peak_memory_stats()
+        t0=time.perf_counter()
+        result=fn()
+        if torch.cuda.is_available():torch.cuda.synchronize()
+        timings[name]=time.perf_counter()-t0
+        peaks[name]=(torch.cuda.max_memory_allocated()/1024**2
+                     if torch.cuda.is_available() else float('nan'))
+        print(f'[INFERENCE] {name}: 70 trajectories in {timings[name]:.3f}s; '
+              f'{peaks[name]:.1f} GPU MiB peak',flush=True)
+        return result
+    R["TB-AWFNO"] = timed("TB-AWFNO",lambda:rollout_tb(bundle["fits"]["TB-AWFNO"]["model"], S_test, bundle["predict"]["TB-AWFNO"]))
+    R["AWFNO"] = timed("AWFNO",lambda:rollout_direct(bundle["fits"]["AWFNO"]["model"], S_test, bundle["predict"]["AWFNO"], "AWFNO"))
+    R["WFNO"] = timed("WFNO",lambda:rollout_direct(bundle["fits"]["WFNO"]["model"], S_test, bundle["predict"]["WFNO"], "WFNO"))
+    R["WFNO-PM"] = timed("WFNO-PM",lambda:rollout_direct(bundle["fits"]["WFNO-PM"]["model"], S_test, bundle["predict"]["WFNO-PM"], "WFNO-PM"))
+    R["FNO"] = timed("FNO",lambda:predict_full(bundle["fits"]["FNO"]["model"], S_test, bundle["predict"]["FNO"]))
     R["Persistence"] = persistence(S_test)
     stats={name: rollout_l2_metrics(arr, S_test) for name, arr in R.items()}
     print("\n================ ABSOLUTE PHYSICAL VORTICITY L2 TEST RESULTS ================")
@@ -1039,6 +1134,15 @@ def evaluate(bundle, S_test, test_idx):
         if name != "Persistence":
             row[f"{key}_best_val_l2"]=float(bundle["fits"][name]["best_val_l2"])
             row[f"{key}_train_time_sec"]=float(bundle["fits"][name]["train_time_sec"])
+            row[f"{key}_inference_test70_sec"]=float(timings[name])
+            row[f"{key}_inference_per_trajectory_sec"]=float(timings[name]/len(S_test))
+            row[f"{key}_peak_inference_allocated_gpu_MiB"]=float(peaks[name])
+            row[f"{key}_params"]=int(count_params(bundle['models'][name]))
+            row[f"{key}_real_scalar_dof"]=int(scalar_parameters(bundle['models'][name]))
+            row[f"{key}_full_l2_std"]=float(stats[name]['full_l2_std'])
+            row[f"{key}_full_l2_median"]=float(stats[name]['full_l2_median'])
+            row[f"{key}_final_l2_std"]=float(stats[name]['final_l2_std'])
+            row[f"{key}_final_l2_median"]=float(stats[name]['final_l2_median'])
     with open(os.path.join(RESULTS_DIR, f"N{n_train}_summary_{tag}.json"), "w") as f:
         json.dump({"row": row, "grid": {"Nx": Nx, "Ny": Ny, "Nt": Nt, "C": C_DYN}}, f, indent=2)
     del R
@@ -1046,20 +1150,61 @@ def evaluate(bundle, S_test, test_idx):
     if torch.cuda.is_available(): torch.cuda.empty_cache()
     return row
 
+
 def save_results(rows):
-    rows=sorted(rows, key=lambda r: r["N_train"])
-    keys=list(rows[0].keys())
-    csv=os.path.join(RESULTS_DIR, "sample_size_sweep_kolmogorov_absolute_L2.csv")
-    with open(csv, "w") as f:
-        f.write(",".join(keys)+"\n")
-        for r in rows: f.write(",".join(str(r[k]) for k in keys)+"\n")
-    js=os.path.join(RESULTS_DIR, "sample_size_sweep_kolmogorov_absolute_L2.json")
-    with open(js, "w") as f: json.dump(rows, f, indent=2)
-    print("Saved:", csv); print("Saved:", js)
-    print("\n================ SAMPLE-SIZE SWEEP SUMMARY: ABSOLUTE FULL L2 ================")
+    rows=sorted(rows,key=lambda x:x['N_train'])
+    # Original Boussinesq-style wide sample-size table.
+    widepath=Path(RESULTS_DIR)/'sample_size_sweep_kolmogorov_absolute_L2.csv'
+    columns=list(rows[0].keys())
+    with widepath.open('w',newline='') as f:
+        writer=csv.DictWriter(f,fieldnames=columns)
+        writer.writeheader();writer.writerows(rows)
+    (Path(RESULTS_DIR)/'sample_size_sweep_kolmogorov_absolute_L2.json').write_text(
+        json.dumps(rows,indent=2))
+    names=['TB-AWFNO','AWFNO','WFNO','WFNO-PM','FNO']
+    flattened=[]
     for r in rows:
-        print(f"N={r['N_train']:4d} | TB-AWFNO {r['TB_AWFNO_full_l2_mean']:.6e} | AWFNO {r['AWFNO_full_l2_mean']:.6e} | WFNO {r['WFNO_full_l2_mean']:.6e} | FNO {r['FNO_full_l2_mean']:.6e} | Persistence {r['Persistence_full_l2_mean']:.6e} | winner {r['winner']}")
-    print("============================================================================")
+        for name in names:
+            prefix=name.replace('-','_')
+            flattened.append({
+                'model':name,'N_train':r['N_train'],
+                'protocol':'direct_full_100' if name=='FNO' else f'window_K{WINDOW_K}',
+                'full_l2_mean':r[f'{prefix}_full_l2_mean'],
+                'full_l2_std':r[f'{prefix}_full_l2_std'],
+                'full_l2_median':r[f'{prefix}_full_l2_median'],
+                'final_l2_mean':r[f'{prefix}_final_l2_mean'],
+                'final_l2_std':r[f'{prefix}_final_l2_std'],
+                'final_l2_median':r[f'{prefix}_final_l2_median'],
+                'params':r[f'{prefix}_params'],
+                'real_scalar_dof':r[f'{prefix}_real_scalar_dof'],
+                'training_seconds':r[f'{prefix}_train_time_sec'],
+                'full_test_set_inference_seconds':r[f'{prefix}_inference_test70_sec'],
+                'inference_seconds_per_trajectory':r[f'{prefix}_inference_per_trajectory_sec'],
+                'peak_inference_allocated_gpu_MiB':
+                    r[f'{prefix}_peak_inference_allocated_gpu_MiB']})
+    with (Path(RESULTS_DIR)/'results_long.csv').open('w',newline='') as f:
+        w=csv.DictWriter(f,fieldnames=flattened[0].keys())
+        w.writeheader();w.writerows(flattened)
+    for metric in ['full_l2_mean','final_l2_mean']:
+        fig,ax=plt.subplots(figsize=(9,5.5))
+        for name in names:
+            subset=[r for r in flattened if r['model']==name]
+            ax.plot([r['N_train'] for r in subset],[r[metric] for r in subset],
+                    marker='o',label=name)
+        ax.set_xlabel('Number of training trajectories')
+        ax.set_ylabel('Absolute physical L2')
+        ax.set_title('Kolmogorov Navier–Stokes: '+metric+' vs training size')
+        ax.legend();ax.grid(alpha=.25)
+        fig.tight_layout()
+        fig.savefig(Path(PLOT_DIR)/f'all_models_{metric}_vs_n.png',dpi=160)
+        plt.close(fig)
+    print('[SAVED] Comparable sample-size tables / plots:',widepath,
+          Path(RESULTS_DIR)/'results_long.csv',flush=True)
+    for n in sorted(set(r['N_train'] for r in flattened)):
+        vals=[r for r in flattened if r['N_train']==n]
+        print(f'[TABLE N={n}] '+ ' | '.join(
+            f'{v["model"]}: full={v["full_l2_mean"]:.4f}, '
+            f'final={v["final_l2_mean"]:.4f}' for v in vals),flush=True)
 
 # ============================================================
 # MAIN

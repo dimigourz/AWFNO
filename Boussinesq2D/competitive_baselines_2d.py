@@ -630,5 +630,36 @@ def main():
     print(f"\nCOMPLETE: {len(rows)} baseline evaluations. Summary: {RESULT_ROOT / 'results.csv'}", flush=True)
 
 
+def smoke_test():
+    """Fast sanity test of all network forward/backward paths on annulus grids."""
+    print("[SMOKE] Checking architectures on 64 × 128 with K=30", flush=True)
+    r = np.linspace(0.5, 1., 64, dtype=np.float32)
+    theta = np.arange(128, dtype=np.float32) * (2 * np.pi / 128)
+    for name in BASELINES:
+        seed_everything(1234)
+        model = make_model(name, r, theta).to(base.device)
+        u = torch.randn(2, 64, 128, device=base.device)
+        y = model(u)
+        assert tuple(y.shape) == (2, 64, 128, base.WINDOW_K), (name, tuple(y.shape))
+        assert torch.isfinite(y).all(), f"{name} nonfinite prediction"
+        loss = y.square().mean()
+        loss.backward()
+        count = sum(p.grad is not None for p in model.parameters() if p.requires_grad)
+        assert count > 0, f"{name} has no gradient-bearing parameters"
+        for p in model.parameters():
+            if p.grad is not None and not torch.isfinite(p.grad).all():
+                raise AssertionError(f"{name} nonfinite backward gradient")
+        print(f"[SMOKE] PASS {name}: shape={tuple(y.shape)}, "
+              f"trainable parameters={param_stats(model)[0]:,}", flush=True)
+        del model, u, y, loss
+        gc.collect()
+        if base.device.type == "cuda":
+            torch.cuda.empty_cache()
+    print("[SMOKE] All requested architectures passed forward/backward checks.", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    if os.environ.get("BASELINE_SMOKE_TEST", "0") == "1":
+        smoke_test()
+    else:
+        main()

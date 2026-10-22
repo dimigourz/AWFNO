@@ -356,7 +356,7 @@ def make_native_model(name, r, theta, uno_width=32):
     if name == "CNO":
         return CNO2D_DirectTime(r, theta)
     if name == "UNet":
-        return UNet2D(1, r, theta, width=32)
+        return UNet2D(1, r, theta, channels=32)
     if name == "UNO":
         return UNO2D_H10(r, theta, width=uno_width, history=10)
     raise ValueError(name)

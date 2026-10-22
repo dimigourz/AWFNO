@@ -1218,8 +1218,14 @@ if __name__ == "__main__":
     print("SPATIAL_STRIDE:", SPATIAL_STRIDE, "| TIME_SUBSAMPLE:", TIME_SUBSAMPLE)
     print("Absolute physical vorticity L2 only; no relative denominator.")
 
+    print('[DATA] Loading verified 101-frame dataset; the original 22-run outputs are NOT used.',flush=True)
     S_train_pool, S_val, S_test, train_idx, val_idx, test_idx, x, y, t = load_or_create_split()
+
     set_geometry(S_train_pool.shape, x, y, t)
+
+    if os.environ.get('NS_SMOKE_ONLY','0')=='1':
+        print('Smoke placeholder',flush=True)
+        raise SystemExit(0)
 
     print("\nLoaded split arrays")
     print_array_info("S_train_pool", S_train_pool)
@@ -1245,9 +1251,16 @@ if __name__ == "__main__":
         report_duplicates(S_val, "validation")
         report_duplicates(S_test, "common_test")
 
+    # Recover completed sample-size rows after a Colab disconnection.
+    summary=Path(RESULTS_DIR)/'sample_size_sweep_kolmogorov_absolute_L2.json'
+    rows=json.loads(summary.read_text()) if summary.exists() else []
+    completed={int(q['N_train']) for q in rows}
+    print('[RESUME] Completed training sizes:',sorted(completed),flush=True)
     # Report each N immediately: no accumulation of twenty models in GPU memory.
-    rows=[]
     for n_train in SAMPLE_SIZES:
+        if n_train in completed and not FORCE_RETRAIN:
+            print(f'[CACHE] N={n_train} already fully evaluated; skipping',flush=True)
+            continue
         b=train_models(n_train,S_train_pool,S_val)
         rows.append(evaluate(b,S_test,test_idx))
         save_results(rows)

@@ -1224,7 +1224,31 @@ if __name__ == "__main__":
     set_geometry(S_train_pool.shape, x, y, t)
 
     if os.environ.get('NS_SMOKE_ONLY','0')=='1':
-        print('Smoke placeholder',flush=True)
+        print('[SMOKE] Five architectures; synthetic fields, no model training.',flush=True)
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        xfake=torch.randn(1,Nx,Ny,1,device=device)
+        tb=TBAWFNO(C_DYN,N_TIME_MODES).to(device)
+        aw=DirectWindowModel(C_DYN,WINDOW_K,'AW').to(device)
+        wf=DirectWindowModel(C_DYN,WINDOW_K,'FNO').to(device)
+        delta,width,m_count=matched_width(scalar_parameters(aw),WINDOW_K)
+        pm=MatchedWFNO(C_DYN,WINDOW_K,width).to(device)
+        full=FNOFull(C_DYN,Nt-1).to(device)
+        for name,model,n in [('TB-AWFNO',tb,N_TIME_MODES),
+                             ('AWFNO',aw,WINDOW_K),('WFNO',wf,WINDOW_K),
+                             ('WFNO-PM',pm,WINDOW_K),('FNO',full,Nt-1)]:
+            output=model(xfake)
+            want=(1,Nx,Ny,1,N_TIME_MODES) if name=='TB-AWFNO' else (1,Nx,Ny,n,1)
+            assert tuple(output.shape)==want,(name,tuple(output.shape),want)
+            assert torch.isfinite(output).all()
+            output.square().mean().backward()
+            assert any(p.grad is not None and torch.isfinite(p.grad).all()
+                       for p in model.parameters() if p.requires_grad)
+            print('[SMOKE PASS]',name,'output',tuple(output.shape),
+                  'params',count_params(model),'real DOF',scalar_parameters(model),
+                  flush=True)
+            model.zero_grad(set_to_none=True)
+        print('[SMOKE PASS] Five models; matched WFNO differs from AWFNO by',
+              f'{100*delta/scalar_parameters(aw):.2f}% in real DOF',flush=True)
         raise SystemExit(0)
 
     print("\nLoaded split arrays")

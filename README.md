@@ -37,7 +37,9 @@ Copy or mount the dataset where the notebooks expect it, or update `DATA_PATH` t
 
 [**Boussinesq2D/ — one-run Colab notebook, original benchmark code, and numerical documentation**](Boussinesq2D/)
 
-The primary competitive suite is now [**Native_Method_Baselines_2D_Colab.ipynb**](Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb): **F-FNO and U-Net one-step autoregressive**, **CNO direct-time**, and **U-NO-H10 history-to-one-step**. U-NO-H10 consumes ten observed fields, so its results are not information-matched to one-initial-state models. The previously completed **K30 adaptation** experiment ([archived K30 notebook](Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)) is explicitly distinct from these models' standard prediction protocols. The primary native-method experiments have not yet been executed.
+The primary competitive suite is [**Native_Method_Baselines_2D_Colab.ipynb**](Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb): **F-FNO and U-Net one-step autoregressive**, **CNO direct-time**, and **U-NO-H10 history-to-one-step**. U-NO-H10 consumes ten observed fields, so its results are **not information-matched** to initial-state-only operators. The earlier **completed K30 adaptation** experiment ([separate K30 notebook](Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)) evaluates different backbones using **AWFNO's K30 forecasting protocol**, not the baselines' own temporal formulations; do not conflate those results with the native comparison. The native-method suite is awaiting passing smoke tests and numerical evaluation.
+
+**Boussinesq setup and troubleshooting:** see the [experiment README](Boussinesq2D/README.md#reproducing-the-native-baseline-experiments-colab). The first native U-Net shape test exposed a factory argument error (`width=32` instead of `channels=32`); this has been corrected in [`reference_architectures_2d.py`](Boussinesq2D/reference_architectures_2d.py). Refresh the downloaded source in Colab before rerunning the smoke tests.
 
 ## Numerical comparison: Burgers H10 sample-size sweep
 

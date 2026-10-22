@@ -536,7 +536,7 @@ def run_one(name,ntrain,seed,pool,val,test,tgrid,arch_sha,base_sha):
         print(f"[CACHE] {name} N={ntrain} seed={seed}: {final}",flush=True)
         return json.loads(final.read_text())
     print(f"[START] {name} N={ntrain} seed={seed} examples={len(source_dataset)}, "
-          f"updates/epoch={(len(source_dataset)+settings['batch']-1)//settings['batch']}",flush=True)
+          f"batch={chosen_batch}; updates/epoch={(len(source_dataset)+chosen_batch-1)//chosen_batch}",flush=True)
     model=make_native_model(name,base.r_grid_np,base.theta_grid_np).to(base.device)
     nparam=base.count_params(model)
     nreal=real_dof(model)

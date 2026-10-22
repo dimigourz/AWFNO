@@ -47,7 +47,24 @@ The native models use the original 64×128×101 HyTeG dataset, disjoint 400/30/7
 
 **Training cost:** At N=400, the F-FNO one-step method has 40,000 train pairs/epoch, batch size 8, and 200 epochs, or **one million optimizer updates**, versus 5,700 updates for the earlier K30 architecture-adaptation test. Start with N=25 and confirm learning curves and memory before the full sweep.
 
-This new study saves to **`MyDrive/anus/Boussinesq_JCP/native_reference_2d/`**, independent of all prior runs. The earlier [K30 comparison Colab](Competitive_Baselines_2D_Colab.ipynb) and results under `competitive_2d_K30/` are retained **only as K30 protocol adaptations**, not as evidence of each baseline's established temporal formulation. **No numerical results from native-method runs are claimed before execution.**
+This new study saves to **`MyDrive/anus/Boussinesq_JCP/native_reference_2d/`**, independent of all prior runs. The earlier [K30 comparison Colab](Competitive_Baselines_2D_Colab.ipynb) and its completed sample-size sweep under `competitive_2d_K30/` are retained **only as K30 protocol adaptations**, not as evidence of each baseline's established temporal formulation. The native-method baseline suite is new; its numerical accuracy has **not yet been established**. A completed K30 run is not a completed native-method run.
+
+### Reproducing the native baseline experiments (Colab)
+
+1. Open [Native_Method_Baselines_2D_Colab.ipynb](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb), attach an **NVIDIA GPU** runtime, and mount Drive. Dataset expected at `/content/gdrive/MyDrive/anus/hyteg_annulus_c_grid_64x128_samples500.pt`; adjust `DATASET` if your Drive uses another location. Drive already being mounted is harmless; `torch.cuda.is_available()` must be true.
+2. In the configuration cell select `MODELS='FFNO,CNO,UNet,UNO'`, `SAMPLE_SIZES='25'`, `SEEDS='1234'`, `EPOCHS=200`, and `SMOKE_TEST=True` for the initial verification. Each selected model is smoke-tested independently for output shape `(B,64,128)`, finite forward values and finite backpropagation gradients. **Do not launch the expensive training sweep until every smoke test passes.**
+3. Rerun the **source-download cell**, then the **architecture-smoke-test cell** whenever the GitHub Python source changes, or reopen the latest Colab notebook. The smoke-test cell now also refreshes `/content/reference_architectures_2d.py` with cache-bypass and verifies the native U-Net constructor before spawning test subprocesses. Merely editing GitHub does **not** update files already copied into an active Colab runtime.
+4. Start the training cell after smoke tests pass. Training logs stream to Colab and to `native_reference_2d/native_training_stdout.log`. Each completed run writes `result.json`, plots and checkpoints under `native_reference_2d/runs/<model>/N<size>_seed<seed>_<config-hash>/`. The aggregate table is `native_reference_2d/results.csv`. Checkpoints are saved periodically for restart/resumption if the exact configuration matches; leave `FORCE_RETRAIN=False` to reuse existing runs. Start at `N_train=25` because native temporal protocols are much more expensive than K30 adaptations.
+
+**Known U-Net smoke-test constructor fix (22 October 2026).** The first native-method version failed before training with
+
+```text
+TypeError: UNet2D.__init__() got an unexpected keyword argument 'width'
+```
+
+`UNet2D` has signature `UNet2D(k, r, theta, channels=32)`, so the native factory in [`reference_architectures_2d.py`](reference_architectures_2d.py) was corrected from `UNet2D(1, r, theta, width=32)` to **`UNet2D(1, r, theta, channels=32)`**. The [native Colab](Native_Method_Baselines_2D_Colab.ipynb) also refreshes this module and checks the keyword before attempting training. If your traceback still shows `width=32`, you are executing a **stale local script**; rerun the source-download cell and smoke tests. **The constructor correction has been committed but a successful full native smoke test and training run have not yet been confirmed.**
+
+**Cost and comparability notes:** F-FNO uses 24 spectral/feed-forward layers, one-step targets, 200 epochs and batch size 8; at `N_train=400` this corresponds to `400*100/8*200 = 1,000,000` optimizer updates. U-NO-H10 uses **ten observed initial frames** and its full-trajectory error is intentionally undefined; compare its final-time and post-`t_{10}` errors separately, not directly in an initial-state-only ranking. All models retain the same held-out test trajectories and physical annular error quadrature, but **their training problems and amounts of observed initial data are not identical**.
 
 ## Modern competitive models — reference-oriented, Cahn–Hilliard-verified backbones
 
@@ -68,7 +85,7 @@ The first draft of this Boussinesq baseline comparison contained loose architect
 
 **Outputs:** `MyDrive/anus/Boussinesq_JCP/competitive_2d_K30/` with resumed checkpoints; aggregate JSON/CSV; full/final mean, median, SD; test-case errors; per-time error and annulus figures; spectral/sharp-region diagnostics; parameter/real-DOF counts; training and inference timing; peak GPU allocation. It also includes combined charts with the *previously computed* AWFNO/FNO/WFNO values.
 
-The Colab notebook installs `neuraloperator==2.0.0` and performs **all four models' shape and gradient smoke checks** before beginning the sample-size sweep. **The smoke tests and production evaluation have not been executed in this environment.** Do not interpret any as-yet-unreported numerical performance as validated.
+The **K30 adaptation** Colab installs `neuraloperator==2.0.0` and provides independent forward/backward architecture smoke checks; its complete N=25–400, seed-1234 sample-size sweep was run by the user. This does **not** validate the separate native-method suite above. The first native-method smoke test exposed the U-Net constructor error documented earlier; the corrected code still requires a successful rerun.
 
 ## Implemented experimental coverage
 
@@ -84,6 +101,6 @@ The Colab notebook installs `neuraloperator==2.0.0` and performs **all four mode
 
 Controlled runs use N=400 with seeds 1234,1235,1236 and write trial JSON plus results.csv. The notebook produces results_aggregated_by_seed.csv. The original sample-size sweep is **not** replicated across multiple seeds.
 
-**Separate competitive implementations now available above:** F-FNO, U-Net, CNO-style and U-NO-style. The original one-run ablation notebook does not execute these baselines automatically. CNO and U-NO reference-implementation parity and numerical results remain outstanding.
+**Two distinct competitive suites are available above:** the **executed K30 architecture-adaptation comparison** and the **new, as-yet unvalidated native temporal-protocol comparison**. The original one-run ablation notebook does not execute either suite automatically. CNO and U-NO are research adaptations of the documented backbone/information protocols; do not claim exact reproduction of original authors' full training configurations.
 
 The production dataset is not included and was unavailable to rerun in this environment; the controlled driver passed a synthetic annulus smoke test. The original FNO dependency is pinned to neuraloperator==2.0.0. Check metric definitions, exact temporal conditioning, and hardware when making quantitative cross-method comparisons.

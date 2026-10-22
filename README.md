@@ -37,7 +37,7 @@ Copy or mount the dataset where the notebooks expect it, or update `DATA_PATH` t
 
 [**Boussinesq2D/ — one-run Colab notebook, original benchmark code, and numerical documentation**](Boussinesq2D/)
 
-This folder contains the original four-model sample-size study, the three-seed controlled architectural experiments, and a **separate competitive-baseline Colab** for FourierFlow/Cahn–Hilliard-style F-FNO, a CNO simplified-reference backbone, a four-level U-Net, and the actual `neuralop.models.UNO` library architecture. All four use an adapted K=30 annular prediction head. The new baselines have **not** been trained on the production dataset.
+The primary competitive suite is now [**Native_Method_Baselines_2D_Colab.ipynb**](Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb): **F-FNO and U-Net one-step autoregressive**, **CNO direct-time**, and **U-NO-H10 history-to-one-step**. U-NO-H10 consumes ten observed fields, so its results are not information-matched to one-initial-state models. The previously completed **K30 adaptation** experiment ([archived K30 notebook](Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)) is explicitly distinct from these models' standard prediction protocols. The primary native-method experiments have not yet been executed.
 
 ## Numerical comparison: Burgers H10 sample-size sweep
 

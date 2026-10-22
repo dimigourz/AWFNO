@@ -1110,6 +1110,41 @@ def train_models(n_train, S_train_pool, S_val):
     if fits[name]["history"] is not None: plot_training_curves(fits[name]["history"], f"N{n_train}_{name}", tag)
     return {"n_train": n_train, "tag": tag, "objects": obj, "models": models, "predict": preds, "fits": fits, "paths": paths}
 
+
+def physically_localized_error_diagnostics(pred,true):
+    """Final-time, 2π-periodic gradient and Fourier-band relative L2 diagnostics.
+    Masks are determined from ground truth ONLY. Frequencies are full-complex
+    FFTs; the energy split is physically interpretable on the 2π torus.
+    """
+    exact=np.asarray(true[:,:,:,-1,0],dtype=np.float64)
+    estimate=np.asarray(pred[:,:,:,-1,0],dtype=np.float64)
+    assert exact.shape==estimate.shape and exact.ndim==3
+    e2=(estimate-exact)**2
+    ux=(np.roll(exact,-1,axis=1)-np.roll(exact,1,axis=1))/(2*DX)
+    uy=(np.roll(exact,-1,axis=2)-np.roll(exact,1,axis=2))/(2*DY)
+    magnitude=np.hypot(ux,uy)
+    cutoff=np.quantile(magnitude,.90,axis=(1,2),keepdims=True)
+    sharp=magnitude>=cutoff
+    sharp_relative=np.sqrt(
+        np.sum(e2*sharp,axis=(1,2))/
+        np.maximum(np.sum(exact**2*sharp,axis=(1,2)),1e-25)
+    )
+    kx=np.fft.fftfreq(exact.shape[1])*exact.shape[1]
+    ky=np.fft.fftfreq(exact.shape[2])*exact.shape[2]
+    shell=np.maximum(np.abs(kx[:,None]),np.abs(ky[None,:]))
+    fft_error=np.fft.fft2(estimate-exact,axes=(1,2))
+    fft_true=np.fft.fft2(exact,axes=(1,2))
+    result={'sharp_gradient_final_relative_l2_mean':float(sharp_relative.mean())}
+    for lo,hi in ((0,16),(16,24),(24,32),(32,43)):
+        mask=(shell>=lo)&(shell<hi)
+        values=np.sqrt(
+          np.sum(np.abs(fft_error[:,mask])**2,axis=1)/
+          np.maximum(np.sum(np.abs(fft_true[:,mask])**2,axis=1),1e-25)
+        )
+        result[f'fourier_band_{lo}_{hi-1}_final_relative_l2_mean']=float(values.mean())
+    return result
+
+
 def evaluate(bundle, S_test, test_idx):
     tag=bundle["tag"]; n_train=bundle["n_train"]
     print("\n"+"="*80); print(f"EVALUATION N_train={n_train} on common test set"); print("="*80)
@@ -1133,6 +1168,9 @@ def evaluate(bundle, S_test, test_idx):
     R["FNO"] = timed("FNO",lambda:predict_full(bundle["fits"]["FNO"]["model"], S_test, bundle["predict"]["FNO"]))
     R["Persistence"] = persistence(S_test)
     stats={name: rollout_l2_metrics(arr, S_test) for name, arr in R.items()}
+    diagnostics={name:physically_localized_error_diagnostics(array,S_test)
+                 for name,array in R.items() if name!='Persistence'}
+
     print("\n================ ABSOLUTE PHYSICAL VORTICITY L2 TEST RESULTS ================")
     for name in ["TB-AWFNO","AWFNO","WFNO","WFNO-PM","FNO","Persistence"]:
         st=stats[name]
@@ -1161,6 +1199,8 @@ def evaluate(bundle, S_test, test_idx):
             row[f"{key}_full_l2_median"]=float(stats[name]['full_l2_median'])
             row[f"{key}_final_l2_std"]=float(stats[name]['final_l2_std'])
             row[f"{key}_final_l2_median"]=float(stats[name]['final_l2_median'])
+            for diagkey,diagvalue in diagnostics[name].items():
+                row[f'{key}_{diagkey}']=float(diagvalue)
     with open(os.path.join(RESULTS_DIR, f"N{n_train}_summary_{tag}.json"), "w") as f:
         json.dump({"row": row, "grid": {"Nx": Nx, "Ny": Ny, "Nt": Nt, "C": C_DYN}}, f, indent=2)
     del R
@@ -1199,7 +1239,17 @@ def save_results(rows):
                 'full_test_set_inference_seconds':r[f'{prefix}_inference_test70_sec'],
                 'inference_seconds_per_trajectory':r[f'{prefix}_inference_per_trajectory_sec'],
                 'peak_inference_allocated_gpu_MiB':
-                    r[f'{prefix}_peak_inference_allocated_gpu_MiB']})
+                    r[f'{prefix}_peak_inference_allocated_gpu_MiB'],
+                'sharp_gradient_final_relative_l2_mean':
+                    r[f'{prefix}_sharp_gradient_final_relative_l2_mean'],
+                'fourier_band_0_15_final_relative_l2_mean':
+                    r[f'{prefix}_fourier_band_0_15_final_relative_l2_mean'],
+                'fourier_band_16_23_final_relative_l2_mean':
+                    r[f'{prefix}_fourier_band_16_23_final_relative_l2_mean'],
+                'fourier_band_24_31_final_relative_l2_mean':
+                    r[f'{prefix}_fourier_band_24_31_final_relative_l2_mean'],
+                'fourier_band_32_42_final_relative_l2_mean':
+                    r[f'{prefix}_fourier_band_32_42_final_relative_l2_mean']})
     with (Path(RESULTS_DIR)/'results_long.csv').open('w',newline='') as f:
         w=csv.DictWriter(f,fieldnames=flattened[0].keys())
         w.writeheader();w.writerows(flattened)
@@ -1356,6 +1406,19 @@ def run_controlled(train_pool,val):
         peak=(float(torch.cuda.max_memory_allocated()/1024**2)
               if torch.cuda.is_available() else float('nan'))
         numbers=rollout_l2_metrics(pred,val)
+        special=physically_localized_error_diagnostics(pred,val)
+        persist=rollout_l2_metrics(persistence(val),val)
+        fig,ax=plt.subplots(figsize=(9,5.2))
+        ax.plot(t_grid,numbers['mean_t'],lw=2,label=kind+' full-rollout error')
+        ax.plot(t_grid,persist['mean_t'],'--',label='persistence baseline')
+        ax.set_xlabel('Time since forecast start')
+        ax.set_ylabel('Mean spatial absolute physical L2 error')
+        ax.set_title('Validation error vs time — '+config['label'])
+        ax.grid(alpha=.2);ax.legend()
+        fig.tight_layout()
+        fig.savefig(run_dir/'validation_error_vs_time.png',dpi=150)
+        plt.close(fig)
+
         np.savez_compressed(run_dir/'validation_error_vs_time.npz',
                             times=np.asarray(t_grid),mean=numbers['mean_t'],
                             median=numbers['median_t'],std=numbers['std_t'])
@@ -1392,6 +1455,7 @@ def run_controlled(train_pool,val):
              'training_seconds':float(fit['train_time_sec']),
              'validation_inference_seconds':float(inference),
              'peak_validation_gpu_mib':float(peak),
+             **special,
              'test_evaluated':False}
         (run_dir/'result.json').write_text(json.dumps(row,indent=2))
         rows.append(row);already.add(signature)
@@ -1401,6 +1465,11 @@ def run_controlled(train_pool,val):
                 'best_val_window_l2','full_l2_mean','full_l2_std',
                 'final_l2_mean','final_l2_std',
                 'training_seconds','validation_inference_seconds',
+                'sharp_gradient_final_relative_l2_mean',
+                'fourier_band_0_15_final_relative_l2_mean',
+                'fourier_band_16_23_final_relative_l2_mean',
+                'fourier_band_24_31_final_relative_l2_mean',
+                'fourier_band_32_42_final_relative_l2_mean',
                 'peak_validation_gpu_mib','configuration_hash']
         with (root/'results.csv').open('w',newline='') as f:
             writer=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore')

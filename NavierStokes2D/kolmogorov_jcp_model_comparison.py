@@ -1206,6 +1206,211 @@ def save_results(rows):
             f'{v["model"]}: full={v["full_l2_mean"]:.4f}, '
             f'final={v["final_l2_mean"]:.4f}' for v in vals),flush=True)
 
+
+# ============================================================
+# JCP REVIEWER CONTROLLED ABLATIONS — INDEPENDENT VALIDATION ONLY
+# ============================================================
+
+def controlled_matrix():
+    """One-factor changes about fixed LGL/K20/M16/D4/r2/N100/seed1234."""
+    base={'order':'LGL','kind':'AWFNO','k':20,'modes':16,
+          'radius':2,'depth':4,'tb_rank':12,'seed':1234,'ntrain':100}
+    jobs={}
+
+    def add(family,label,**kwargs):
+        q=dict(base,**kwargs)
+        key=(q['kind'],q['order'],q['k'],q['modes'],q['radius'],
+             q['depth'],q['tb_rank'],q['seed'],q['ntrain'])
+        if key in jobs:
+            if family not in jobs[key]['families']:jobs[key]['families'].append(family)
+        else:
+            jobs[key]=dict(q,label=label,families=[family])
+
+    for order in ('LGL','GLL','LLG'):
+        add('layer_ordering','ordering_'+order,order=order)
+    for order in ('LLL','GGG'):
+        add('operator_components','component_'+order,order=order)
+    for k in (2,5,10,20):
+        add('window_K',f'K_{k}',k=k)
+    for m in (8,16,24,32):
+        add('Fourier_modes',f'M_{m}',modes=m)
+    for radius in (1,2,3):
+        add('local_radius',f'r_{radius}',radius=radius)
+    for depth in (2,4,6):
+        add('depth',f'D_{depth}',depth=depth)
+    for rank in (6,12,18):
+        add('temporal_basis_rank',f'TB_rank_{rank}',kind='TB-AWFNO',tb_rank=rank)
+    for seed in (1235,1236):
+        for order in ('LGL','GLL'):
+            add('order_repeated_seeds',f'{order}_seed_{seed}',order=order,seed=seed)
+    add('matched_width','WFNO_PM_K20',kind='WFNO-PM')
+    add('standard_wfno','WFNO_K20',kind='WFNO')
+    return list(jobs.values())
+
+
+def make_ordered_block(order):
+    class OrderedBlock(nn.Module):
+        def __init__(self,width):
+            super().__init__()
+            ops=[]
+            for part in order:
+                if part=='L':
+                    op=nn.Conv2d(width,width,2*LOCAL_RADIUS+1,
+                                 padding=LOCAL_RADIUS,padding_mode='circular')
+                else:
+                    op=SpectralConv2d(width,width,MODES_X,MODES_Y)
+                ops.append(op)
+            self.ops=nn.ModuleList(ops)
+        def forward(self,z):
+            for op in self.ops:z=z+F.gelu(op(z))
+            return z
+    return OrderedBlock
+
+
+def run_controlled(train_pool,val):
+    """Validate without touching test targets. Never import the previous 22-run outputs."""
+    global WINDOW_K,WINDOW_STRIDE,MODES_X,MODES_Y,LOCAL_RADIUS,N_LAYERS
+    global N_TIME_MODES,SEED,ExactLKLBlock
+    import csv
+    root=Path(CACHE_ROOT)/'controlled_corrected_v1'
+    root.mkdir(exist_ok=True,parents=True)
+    matrix=controlled_matrix()
+    plan=root/'declared_matrix.json'
+    if plan.is_file():
+        if json.loads(plan.read_text())!=matrix:
+            raise ValueError('Ablation matrix changed; choose a NEW output directory.')
+    else:plan.write_text(json.dumps(matrix,indent=2))
+    block_orig=ExactLKLBlock
+    original=(WINDOW_K,WINDOW_STRIDE,MODES_X,MODES_Y,
+              LOCAL_RADIUS,N_LAYERS,N_TIME_MODES,SEED)
+    summary=root/'results.json'
+    rows=json.loads(summary.read_text()) if summary.exists() else []
+    already={row['configuration_hash'] for row in rows}
+    for i,config in enumerate(matrix,1):
+        WINDOW_K=config['k'];WINDOW_STRIDE=WINDOW_K
+        MODES_X=MODES_Y=config['modes']
+        LOCAL_RADIUS=config['radius'];N_LAYERS=config['depth']
+        N_TIME_MODES=config['tb_rank'];SEED=config['seed']
+        ExactLKLBlock=make_ordered_block(config['order'])
+        random.seed(SEED);np.random.seed(SEED);torch.manual_seed(SEED)
+        if torch.cuda.is_available():torch.cuda.manual_seed_all(SEED)
+        signature=hashlib.sha256(json.dumps(config,sort_keys=True).encode()).hexdigest()[:14]
+        label=f"{config['label']}_{signature}"
+        if signature in already:
+            print(f'[REVIEWER CACHE] {i}/{len(matrix)} {label}',flush=True)
+            continue
+        run_dir=root/label;run_dir.mkdir(exist_ok=True)
+        print(f'[REVIEWER START] {i}/{len(matrix)} {label}',flush=True)
+        training=train_pool[:config['ntrain']]
+        obj=build_objects(config['ntrain'],train_pool,val)
+        kind=config['kind']
+        if kind=='AWFNO':
+            model=DirectWindowModel(C_DYN,WINDOW_K,'AW').to(device)
+            predict=make_direct_predict(model,obj['normer'],obj['normer'],False)
+        elif kind=='TB-AWFNO':
+            model=TBAWFNO(C_DYN,N_TIME_MODES).to(device)
+            predict=make_tb_predict(model,obj['normer'],obj['basis_t'])
+        elif kind=='WFNO':
+            model=DirectWindowModel(C_DYN,WINDOW_K,'FNO').to(device)
+            predict=make_direct_predict(model,obj['normer'],obj['normer'],False)
+        elif kind=='WFNO-PM':
+            ref=DirectWindowModel(C_DYN,WINDOW_K,'AW')
+            _,width,_=matched_width(scalar_parameters(ref),WINDOW_K)
+            del ref
+            model=MatchedWFNO(C_DYN,WINDOW_K,width).to(device)
+            predict=make_direct_predict(model,obj['normer'],obj['normer'],False)
+        else:raise RuntimeError(kind)
+        params=count_params(model)
+        scalar_dof=scalar_parameters(model)
+        ckpt=run_dir/'checkpoint_epoch.pt'
+        fit=_checkpoint_fit(model,obj['train_loader'],obj['val_loader'],
+                            predict,obj['normer'],kind,ckpt)
+        file=run_dir/'best_model.pt'
+        save_model_checkpoint(file,fit['model'],{'config':config,
+                                               'training_seconds':fit['train_time_sec']})
+        if torch.cuda.is_available():
+            torch.cuda.synchronize();torch.cuda.reset_peak_memory_stats()
+        started=time.perf_counter()
+        if kind=='TB-AWFNO':pred=rollout_tb(model,val,predict)
+        else:pred=rollout_direct(model,val,predict,kind)
+        if torch.cuda.is_available():torch.cuda.synchronize()
+        inference=time.perf_counter()-started
+        peak=(float(torch.cuda.max_memory_allocated()/1024**2)
+              if torch.cuda.is_available() else float('nan'))
+        numbers=rollout_l2_metrics(pred,val)
+        np.savez_compressed(run_dir/'validation_error_vs_time.npz',
+                            times=np.asarray(t_grid),mean=numbers['mean_t'],
+                            median=numbers['median_t'],std=numbers['std_t'])
+        np.savez_compressed(run_dir/'validation_preview.npz',
+                            truth=val[[0,15]],prediction=pred[[0,15]])
+        # Standalone comparison panels are saved for two validation trajectories.
+        for case in (0,15):
+            indices=[0,25,50,75,100]
+            true=val[case,:,:,:,0]
+            predicted=pred[case,:,:,:,0]
+            vmax=max(float(np.abs(true).max()),1.e-12)
+            errcap=max(float(np.percentile(np.abs(predicted-true),99)),1.e-12)
+            fig,axes=plt.subplots(3,5,figsize=(15,8),constrained_layout=True)
+            for j,k in enumerate(indices):
+                axes[0,j].imshow(true[:,:,k].T,origin='lower',cmap='RdBu_r',
+                                 vmin=-vmax,vmax=vmax)
+                axes[1,j].imshow(predicted[:,:,k].T,origin='lower',cmap='RdBu_r',
+                                 vmin=-vmax,vmax=vmax)
+                axes[2,j].imshow(np.abs(predicted[:,:,k]-true[:,:,k]).T,
+                                 origin='lower',cmap='magma',vmin=0,vmax=errcap)
+                axes[0,j].set_title(f't={float(t_grid[k]):.4f}')
+                for row in axes[:,j]:row.set_xticks([]);row.set_yticks([])
+            for ax,t in zip(axes[:,0],['True','Prediction','Absolute error']):
+                ax.set_ylabel(t)
+            fig.savefig(run_dir/f'validation_vorticity_case_{case}.png',dpi=130)
+            plt.close(fig)
+        row={**config,'configuration_hash':signature,'families':config['families'],
+             'model':kind,'params':params,'real_scalar_dof':scalar_dof,
+             'best_val_window_l2':float(fit['best_val_l2']),
+             'full_l2_mean':float(numbers['full_l2_mean']),
+             'full_l2_std':float(numbers['full_l2_std']),
+             'final_l2_mean':float(numbers['final_l2_mean']),
+             'final_l2_std':float(numbers['final_l2_std']),
+             'training_seconds':float(fit['train_time_sec']),
+             'validation_inference_seconds':float(inference),
+             'peak_validation_gpu_mib':float(peak),
+             'test_evaluated':False}
+        (run_dir/'result.json').write_text(json.dumps(row,indent=2))
+        rows.append(row);already.add(signature)
+        summary.write_text(json.dumps(rows,indent=2))
+        fields=['label','families','model','order','k','modes','radius','depth',
+                'tb_rank','seed','ntrain','params','real_scalar_dof',
+                'best_val_window_l2','full_l2_mean','full_l2_std',
+                'final_l2_mean','final_l2_std',
+                'training_seconds','validation_inference_seconds',
+                'peak_validation_gpu_mib','configuration_hash']
+        with (root/'results.csv').open('w',newline='') as f:
+            writer=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore')
+            writer.writeheader()
+            for r in rows:
+                r0=dict(r);r0['families']=';'.join(r['families'])
+                writer.writerow(r0)
+        fig,ax=plt.subplots(figsize=(15,5))
+        labels=[x['label'] for x in rows]
+        ax.bar(range(len(rows)),[x['full_l2_mean'] for x in rows])
+        ax.set_xticks(range(len(rows)),labels,rotation=80,fontsize=8)
+        ax.set_ylabel('Validation absolute physical full L2')
+        ax.set_title('Controlled reviewer ablations — corrected Navier–Stokes')
+        ax.grid(axis='y',alpha=.25);fig.tight_layout()
+        fig.savefig(root/'ALL_corrected_ablation_results.png',dpi=150)
+        plt.close(fig)
+        print(f'[REVIEWER COMPLETE] {i}/{len(matrix)} {label} '
+              f'full={row["full_l2_mean"]:.5f} final={row["final_l2_mean"]:.5f}',
+              flush=True)
+        del model,fit,pred,obj
+        gc.collect()
+        if torch.cuda.is_available():torch.cuda.empty_cache()
+    (WINDOW_K,WINDOW_STRIDE,MODES_X,MODES_Y,LOCAL_RADIUS,
+     N_LAYERS,N_TIME_MODES,SEED)=original
+    ExactLKLBlock=block_orig
+    print('[REVIEWER SUITE STATUS]',len(rows),'of',len(matrix),
+          'validation-only configurations complete',flush=True)
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -1249,6 +1454,12 @@ if __name__ == "__main__":
             model.zero_grad(set_to_none=True)
         print('[SMOKE PASS] Five models; matched WFNO differs from AWFNO by',
               f'{100*delta/scalar_parameters(aw):.2f}% in real DOF',flush=True)
+        raise SystemExit(0)
+
+    if os.environ.get('NS_CONTROLLED_ONLY','0')=='1':
+        print('[MODE] Corrected independent controlled ablations; test metrics SEALED',
+              flush=True)
+        run_controlled(S_train_pool,S_val)
         raise SystemExit(0)
 
     print("\nLoaded split arrays")

@@ -27,7 +27,7 @@ Recorded for **TB-AWFNO / AWFNO / WFNO / FNO**: full/final absolute physical L2 
 
 The Colab launcher now streams training output live, saves `original_stdout.log` and `rebuttal_stdout.log`, and prints a heartbeat when there has been no output. Reopen the GitHub Colab link to obtain this version; an already running kernel will continue to run its previously loaded script.
 
-## Method-faithful competitive experiments (primary JCP comparison)
+## Competitive baselines — original temporal prediction protocols
 
 **[Launch NEW native-method Colab](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Native_Method_Baselines_2D_Colab.ipynb)** · [Native training and evaluation source](native_method_baselines_2d.py) · [Architectures](reference_architectures_2d.py)
 
@@ -65,27 +65,6 @@ TypeError: UNet2D.__init__() got an unexpected keyword argument 'width'
 `UNet2D` has signature `UNet2D(k, r, theta, channels=32)`, so the native factory in [`reference_architectures_2d.py`](reference_architectures_2d.py) was corrected from `UNet2D(1, r, theta, width=32)` to **`UNet2D(1, r, theta, channels=32)`**. The [native Colab](Native_Method_Baselines_2D_Colab.ipynb) also refreshes this module and checks the keyword before attempting training. If your traceback still shows `width=32`, you are executing a **stale local script**; rerun the source-download cell and smoke tests. **The constructor correction has been committed but a successful full native smoke test and training run have not yet been confirmed.**
 
 **Cost and comparability notes:** F-FNO uses 24 spectral/feed-forward layers, one-step targets, 200 epochs and batch size 8; at `N_train=400` this corresponds to `400*100/8*200 = 1,000,000` optimizer updates. U-NO-H10 uses **ten observed initial frames** and its full-trajectory error is intentionally undefined; compare its final-time and post-`t_{10}` errors separately, not directly in an initial-state-only ranking. All models retain the same held-out test trajectories and physical annular error quadrature, but **their training problems and amounts of observed initial data are not identical**.
-
-## Modern competitive models — reference-oriented, Cahn–Hilliard-verified backbones
-
-**[Launch updated Colab](https://colab.research.google.com/github/dimigourz/AWFNO/blob/main/Boussinesq2D/Competitive_Baselines_2D_Colab.ipynb)** · [Training and evaluation driver](competitive_baselines_2d.py) · [Readable reference-style architectures](reference_architectures_2d.py)
-
-The first draft of this Boussinesq baseline comparison contained loose architectural approximations. They **have been replaced** to track the implementations previously used for Burgers and Cahn–Hilliard more closely:
-
-| Model | Architecture and provenance | Differences from published task |
-|---|---|---|
-| **F-FNO** | Adapted from our Cahn–Hilliard `FFNO2D_AR` / [FourierFlow](https://github.com/alasdairtran/fourierflow): 24 factorized spectral/feed-forward layers, spectral weights **shared across depth**, residual backcasts, width 64, 16 modes per axis, 4× feed-forward expansion; float32 FFT. | Predicts the **next 30 fields** rather than a single next field; single-state input and the same 30-frame rollout as AWFNO. |
-| **CNO** | Port of the **official-simplified CNO2d** architecture used in our Cahn–Hilliard baseline, with bicubic antialiased LeakyReLU blocks, 3 multiresolution layers, per-level residual subnets and a residual neck, with multiscale skip paths. See the [official CNO repository](https://github.com/camlab-ethz/ConvolutionalNeuralOperator). | Adapted to rectangular 64×128 polar coordinates and a **30-frame window output head**, rather than Cahn–Hilliard's time-query direct CNO. Uses periodic angular and nonperiodic radial padding. Not the original NeurIPS 2023 classic CNO. |
-| **U-Net** | Four-level convolutional encoder–decoder with group norm, transposed upconvolutions, skip connections; follows our Cahn–Hilliard U-Net baseline. | 30-frame output, polar coordinate/angle encoding and radial/azimuthal boundary behavior. |
-| **U-NO** | Imports **`neuralop.models.UNO`** from `neuraloperator==2.0.0`, with a 5-level down/up Fourier configuration and horizontal skips. See the [library UNO reference](https://neuraloperator.github.io/dev/modules/generated/neuralop.models.UNO.html). | Adds polar coordinate features and 30-frame output head. |
-
-**Fixed annular comparison protocol:** exact original dataset and training/validation/test trajectories (400/30/70); sample sizes 25–400; `Nr×Ntheta×Nt=64×128×101`; **K=30**, window stride 30, no test teacher forcing; 150 epochs, MSE, AdamW + cosine schedule, clip norm 1 for new models; best validation-window physical-L2 checkpoint. All reported test errors use the original absolute, annulus-weighted (L^2) quadrature. The original AWFNO/FNO/WFNO rows are loaded from previous checkpoint evaluations, not retrained.
-
-**Design caveat:** Holding **K=30** makes the mapping and training target identical to AWFNO, but the original Burgers/Cahn–Hilliard implementations used different temporal protocols (e.g. single-step F-FNO and direct-time CNO). Thus this is a **reference-architecture, same-task comparison**, **not an exact reproduction of the authors' benchmark training protocols**. The 30-channel prediction head is an intentional experimental adaptation, not a claim of source-identical code.
-
-**Outputs:** `MyDrive/anus/Boussinesq_JCP/competitive_2d_K30/` with resumed checkpoints; aggregate JSON/CSV; full/final mean, median, SD; test-case errors; per-time error and annulus figures; spectral/sharp-region diagnostics; parameter/real-DOF counts; training and inference timing; peak GPU allocation. It also includes combined charts with the *previously computed* AWFNO/FNO/WFNO values.
-
-The **K30 adaptation** Colab installs `neuraloperator==2.0.0` and provides independent forward/backward architecture smoke checks; its complete N=25–400, seed-1234 sample-size sweep was run by the user. This does **not** validate the separate native-method suite above. The first native-method smoke test exposed the U-Net constructor error documented earlier; the corrected code still requires a successful rerun.
 
 ## Implemented experimental coverage
 

@@ -266,6 +266,11 @@ class UNO2D(nn.Module):
         from neuralop.models import UNO as NeuralopUNO
         self.coords=StateAndCoordinates(r,theta)
         self.network=NeuralopUNO(
+            # neuraloperator 2.0.0 defaults to channel_mlp_skip='soft-gating',
+            # which raises when 32 -> 64 -> 128 channel widths change.
+            # Use learnable linear projections on channel-changing skips.
+            fno_skip="linear",
+            channel_mlp_skip="linear",
             in_channels=4,out_channels=k,hidden_channels=width,
             lifting_channels=64,projection_channels=64,
             positional_embedding=None,

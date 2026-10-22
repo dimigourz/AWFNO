@@ -722,7 +722,7 @@ def train_epoch_windowed(model, loader, opt, predict, normer, kind):
         pred = predict(s0)[1] if kind == "TB-AWFNO" else predict(s0)
         loss = window_loss(pred, true, normer)
         loss.backward()
-        if kind in ["TB-AWFNO", "AWFNO"]: torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # common clipping policy
         opt.step()
         bs=s0.shape[0]; tot += loss.item()*bs; tot_l2 += abs_l2_window_batch(pred.detach(), true).mean().item()*bs; n += bs
     return {"loss": tot/max(n,1), "abs_l2": tot_l2/max(n,1)}
@@ -768,7 +768,7 @@ def train_epoch_full(model, loader, opt, predict, normer):
         opt.zero_grad(set_to_none=True)
         pred=predict(s0)
         loss = window_loss(pred, true, normer)
-        loss.backward(); opt.step()
+        loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(),1.0); opt.step()
         bs=s0.shape[0]; tot += loss.item()*bs; tot_l2 += abs_l2_window_batch(pred.detach(), true).mean().item()*bs; n += bs
     return {"loss": tot/max(n,1), "abs_l2": tot_l2/max(n,1)}
 

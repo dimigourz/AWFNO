@@ -997,7 +997,8 @@ def main():
     pm_width,pm_gap=smoke_test(args,device)
     if args.smoke_only:
         emit('[SMOKE ONLY] Did not open dataset, train or inspect test trajectories.')
-        return    U=load_source(args.dataset,verify_hash=args.verify_file_hash)
+        return
+    U=load_source(args.dataset,verify_hash=args.verify_file_hash)
     emit(f'[DATASET] {tuple(U.shape)} | data SHA={EXPECTED_DATA_SHA} | '
          f'sealed 70 test trajectories')
     plan=expected_configs(args,pm_width,pm_gap)

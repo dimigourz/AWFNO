@@ -54,6 +54,11 @@ Under `controlled_corrected_v1/`:
 
 These are one-factor-at-a-time comparisons, not a full factorial grid. Component ablations do not have matched parameter counts; the table always lists both the real scalar DOF and the architecture. Reviewers' ablations are **validation-only**, kept separate from the original-model 70-case test comparison. Each run writes a checkpoint, trajectory error curves, 3×5 true/predicted/error vorticity panels and a JSON result; aggregated outputs are `results.csv` and `ALL_corrected_ablation_results.png`.
 
+## Checkpoint recovery: CNO / U-Net / UNO-H10 (F-FNO paused)
+
+[**One-click Colab: resume saved models and generate incremental comparison tables and figures**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_Resume_NoFFNO_Colab.ipynb)
+
+The recovery notebook reads the **same** training checkpoints at `MyDrive/AWFNO_NS_Re500_101_NATIVE_BASELINES_H10_v3/runs/`, skips complete fits, resumes partial runs using the unchanged v3 config hashes and training hyperparameters, and excludes F-FNO from training/test (its source and saved checkpoints remain intact). First it prints the complete cached validation table and evaluates only currently completed CNO, U-Net and UNO-H10 models on the 70 held-out test trajectories, without retraining. Then it resumes remaining model/N combinations and saves physical L², common forecast-only t10–t100 L², relative H¹, frequency-region error, timing, trajectories and truth/prediction/error panels. A fresh, separate output folder `RECOVERY_COMPARISON_NO_FFNO_v1/` prevents overwriting the original locked test plan. **Incremental testing does not imply all N have finished; do not tune using test scores.** UNO-H10 sees ten true initial frames. Run on GPU and use *Runtime → Run all*, then rerun to resume after Colab time limits. Avoid running the old and new notebooks simultaneously against the same Drive checkpoint folders.
 ## Additional competitive neural-operator baselines
 
 [**Run the F-FNO / CNO / U-Net / UNO-H10 extension in Colab**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_FFNO_CNO_UNet_UNO_H10_Colab.ipynb)

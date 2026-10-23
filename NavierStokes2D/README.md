@@ -54,6 +54,14 @@ Under `controlled_corrected_v1/`:
 
 These are one-factor-at-a-time comparisons, not a full factorial grid. Component ablations do not have matched parameter counts; the table always lists both the real scalar DOF and the architecture. Reviewers' ablations are **validation-only**, kept separate from the original-model 70-case test comparison. Each run writes a checkpoint, trajectory error curves, 3×5 true/predicted/error vorticity panels and a JSON result; aggregated outputs are `results.csv` and `ALL_corrected_ablation_results.png`.
 
+## Additional competitive neural-operator baselines
+
+[**Run the F-FNO / CNO / U-Net / UNO-H10 extension in Colab**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_FFNO_CNO_UNet_UNO_H10_Colab.ipynb)
+
+This **separate, readable notebook** preserves the original five-model and ablation code and adds 16 fits for N = 25, 50, 100, 200. F-FNO (24-layer) and U-Net use one-step autoregressive forecasting; CNO uses direct-time queries from the initial state; UNO-H10 uses the first ten true frames and a 40-step differentiable training rollout. Consequently, **UNO-H10 is not information-matched to the initial-state-only methods**. The adaptations follow previously used Burgers/Cahn–Hilliard architecture families; they are not official untouched reference training scripts.
+
+Open on a GPU runtime, verify the mounted Drive `DATASET` path, and select **Runtime → Run all**. Code is present in plain Python `%%writefile` cells. The new run folder is `MyDrive/AWFNO_NS_Re500_101_NATIVE_BASELINES_H10_v3/`, separate from the original results. Rerun with unchanged settings to resume checkpoints. `validation_selection.csv` is written as configurations finish; `new_baselines_test_results.csv` and `ALL_MODELS_COMPARISON.csv` appear after all fits have passed validation selection and the locked test is evaluated. Combined comparisons depend on the original publication table being present. The full added GPU sweep has not been verified here.
+
 ## Running safely
 
 Open the primary Colab above on a GPU runtime. The notebook installs the pinned native FNO package, verifies generation metadata, retrieves readable source pinned to a Git commit, compiles the source, and runs forward/backward smoke tests for all five architectures **before starting training**. The Colab streams unbuffered progress, prints heartbeat while a subprocess is alive, and archives full stdout logs to Drive. It may take multiple GPU sessions to complete; rerun the training cells to resume rather than restarting or regenerating PDE data.

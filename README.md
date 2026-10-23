@@ -8,6 +8,11 @@ Research code and numerical experiments for learning the evolution operators of 
 
 [**Corrected 101-frame, five-model comparative and controlled ablation Colab**](NavierStokes2D/Kolmogorov_NS_JCP_Original_Five_Model_Colab.ipynb) — independently compares TB-AWFNO, AWFNO, standard WFNO, real-parameter-matched WFNO, and native full-trajectory FNO at 25/50/100/200 training trajectories, then runs validation-only ordering/component/K/mode/radius/depth/temporal-basis ablations. [Full benchmark protocol and output table paths](NavierStokes2D/README.md). Original verified dataset and earlier 22-run exploration remain unchanged; **do not conflate old exploratory validation errors with the new five-model test table**.
 
+### Navier–Stokes: resume saved baselines, no F-FNO training
+
+[**Open recovery and comparison notebook in Google Colab**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_Resume_NoFFNO_Colab.ipynb)
+
+Use this **new companion notebook** to reuse the exact existing Re=500 `...NATIVE_BASELINES_H10_v3` checkpoints. It skips F-FNO training and evaluation but retains its complete implementation and previous saved fits. It resumes unfinished **CNO, U-Net and UNO-H10** configurations at N=25/50/100/200 without altering checkpoint hashes or the original 40-run AWFNO benchmark. Completed fits are evaluated and reported separately, with cumulative physical L², relative H¹, spectral/sharp-region diagnostics, runtime, and truth/prediction/error vorticity plots. Outputs are isolated under `RECOVERY_COMPARISON_NO_FFNO_v1`; available original AWFNO model scores are merged only when the original locked `publication_table.csv` exists. **UNO-H10 has 10 observed frames and is not an equal-input baseline.** No completed numerical test results are asserted by this README.
 ### Additional Re=500 reference-oriented baselines
 
 [**Open F-FNO / CNO / U-Net / UNO-H10 directly in Google Colab**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_FFNO_CNO_UNet_UNO_H10_Colab.ipynb)

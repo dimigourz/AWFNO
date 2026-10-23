@@ -8,6 +8,23 @@ Research code and numerical experiments for learning the evolution operators of 
 
 [**Corrected 101-frame, five-model comparative and controlled ablation Colab**](NavierStokes2D/Kolmogorov_NS_JCP_Original_Five_Model_Colab.ipynb) — independently compares TB-AWFNO, AWFNO, standard WFNO, real-parameter-matched WFNO, and native full-trajectory FNO at 25/50/100/200 training trajectories, then runs validation-only ordering/component/K/mode/radius/depth/temporal-basis ablations. [Full benchmark protocol and output table paths](NavierStokes2D/README.md). Original verified dataset and earlier 22-run exploration remain unchanged; **do not conflate old exploratory validation errors with the new five-model test table**.
 
+### Additional Re=500 reference-oriented baselines
+
+[**Open F-FNO / CNO / U-Net / UNO-H10 directly in Google Colab**](https://colab.research.google.com/github/dimigourz/AWFNO/blob/colab/navier-stokes-re500-extra-baselines-20261023/notebooks/NavierStokes_Re500_FFNO_CNO_UNet_UNO_H10_Colab.ipynb)
+
+The companion notebook adds **16 independent fits**: four model families at N = 25, 50, 100 and 200, on the verified 101-frame, 128×128, Re=500 dataset. The original Navier–Stokes comparison and ablation suite are **unchanged**.
+
+| Baseline | Temporal formulation | Observed test frames |
+| --- | --- | --- |
+| 24-layer F-FNO | One-step autoregressive | Initial frame only |
+| CNO | Direct-time, initial state + target time | Initial frame only |
+| U-Net | One-step autoregressive | Initial frame only |
+| UNO-H10 | Seven-block spectral U-shaped network; 40-step differentiable training rollout | First 10 frames |
+
+**Fairness:** UNO-H10 has nine additional exact observations; its scores must not be treated as equal-input evidence of architectural superiority. These are reference-oriented **adaptations**, not untouched author-provided implementations. Models retain their own temporal training formulations, so compute and optimizer-step budgets also differ.
+
+The notebook includes readable Python source, model-shape/gradient smoke tests, resumable Drive checkpoints, validation-only model selection, and test-set evaluation **only after all 16 fits finish**. It saves separate validation/test CSVs, per-model parameter and timing summaries, physical L² and H¹ diagnostics, and field plots. Merged figures are conditional on the original locked test table being present. **No new numerical test results have been verified here.** See the [Navier–Stokes experiment guide](NavierStokes2D/README.md) for dataset provenance, split and the original suite.
+
 ## Experiments
 
 | Directory | Contents |

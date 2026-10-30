@@ -36,8 +36,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import annulus2d_jcp_experiments as base
-from reference_architectures_2d import make_native_model
+import awfno as base
+from architectures import make_native_model
 
 VERSION = "boussinesq_native_methods_v2_autobatch_earlystop"
 VALID_MODELS = ("FFNO", "CNO", "UNet", "UNO")
@@ -656,7 +656,7 @@ def smoke():
         if base.device.type=="cuda":torch.cuda.empty_cache()
 
 def main():
-    arch_sha=hashlib.sha256(Path(__import__("reference_architectures_2d").__file__).read_bytes()).hexdigest()
+    arch_sha=hashlib.sha256(Path(__import__("architectures").__file__).read_bytes()).hexdigest()
     base_sha=hashlib.sha256(Path(base.__file__).read_bytes()).hexdigest()
     U,r,theta,t,sample_ids=base.load_annulus_dataset(base.DATA_PATH)
     U,r,theta=base.downsample_polar_grid(U,r,theta,base.TARGET_NR,base.TARGET_NTHETA)

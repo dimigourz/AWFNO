@@ -198,6 +198,10 @@ def save_metrics(model, predicted, true, best_val, train_time, basis_energy,
     else:
         metrics = base.rollout_l2_metrics(predicted, true)
         params = base.count_params(model)
+    if PDE == "cahn_hilliard_2d":
+        metrics = {**metrics,
+                   "full_l2_std": metrics["full_l2_std_test"],
+                   "final_l2_std": metrics["final_l2_std_test"]}
     result = {
         "pde": PDE, "model": "TB-AWFNO", "N_train": N,
         "K": K, "M": M, "seed": SEED, "n_test": int(len(true)),
